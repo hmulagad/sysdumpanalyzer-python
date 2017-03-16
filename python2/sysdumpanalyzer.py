@@ -83,7 +83,8 @@ def navigatefolders():
 ##Function to search for all Errors and Warnings in log files
 def errorsandwarns(logfile):
 
-    searchstrings = ['ERROR','WARN','FATAL']
+    searchstrings = ['ERROR','WARN','FATAL','DBA-DBW-E','DBA-PCX-E','DBA-SQL-E','DBA-DSP-E','DBA-ATS-E']
+    ##'DBA-DBW-W','DBA-PCX-W','DBA-SQL-W','DBA-DSP-W','DBA-ATS-W' - Warnings for ASX, add if needed
 
     try:
         fobj = open(logfile)
