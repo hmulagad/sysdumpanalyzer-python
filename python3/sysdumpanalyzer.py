@@ -1,3 +1,10 @@
+####################################################################################################################
+##
+## 03/22/17 - Added core file count and core file names to be written in systemdetails.txt
+## 03/22/17 - Added SEVERE in the list of search string
+## 03/22/17 - Added latest backtrace file info in errorsandwarns.txt
+####################################################################################################################
+
 import os
 import re
 import sqlite3
@@ -55,12 +62,15 @@ def closefile(fobj):
     fobj.close()
 
 
-#Directory walk of the extracted bundle
+#Directory walk of the extracted bundle and build list for config,log,core files
 def navigatefolders():
     
     cwd = os.getcwd()
     filelist = []
     configfiles = []
+    corefiles = []
+    folderstoread = ['coredumps']
+    
     
     for fdname in os.listdir(cwd):
         if os.path.isdir(fdname):
@@ -80,10 +90,57 @@ def navigatefolders():
         #print(logfile)
         configdetails(logfile)
 
+##Get list of all core files
+    for logfile in configfiles:
+        for foldername in folderstoread:
+            if foldername in logfile:
+                corefiles.append(logfile)
+
+    coredetails(corefiles)
+
+##Function to write core file count and list to systemdetails file
+def coredetails(cdmpfiles):
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n***** Core Files summary ***** \n')    
+
+    cdmpcnt = len(cdmpfiles)
+    fwrite.write(str(cdmpcnt))
+
+    for logfile in cdmpfiles:
+        fwrite.write('\n')
+        fwrite.write(logfile[logfile.index('coredump'):])
+    
+    fwrite.close()
+
+    if len(cdmpfiles)!= 0:
+        cdmpfiles.sort()
+        crdmpltst = cdmpfiles[-1]
+
+        backtraceltst(crdmpltst)
+
+
+##Write first 70 lines backtrace from latest core file
+def backtraceltst(crdmpltst):
+    n = 70
+    fobj = openfile(crdmpltst)
+
+    fwrite = open(filename,'a')
+
+    fwrite.write('\n***** backtrace details ***** \n')
+    fwrite.write(crdmpltst)
+    fwrite.write('\n')
+
+    for i in range(1,n):
+        line = fobj.readline()
+        fwrite.write(line)
+        
+    fwrite.close()
+    closefile(fobj)
+    
 ##Function to search for all Errors and Warnings in log files
 def errorsandwarns(logfile):
 
-    searchstrings = ['ERROR','WARN','FATAL','DBA-DBW-E','DBA-PCX-E','DBA-SQL-E','DBA-DSP-E','DBA-ATS-E']
+    searchstrings = ['SEVERE','ERROR','WARN','FATAL','DBA-DBW-E','DBA-PCX-E','DBA-SQL-E','DBA-DSP-E','DBA-ATS-E']
     ##'DBA-DBW-W','DBA-PCX-W','DBA-SQL-W','DBA-DSP-W','DBA-ATS-W' - Warnings for ASX, add if needed
 
     try:
@@ -155,6 +212,7 @@ def uname(logfile):
     
     for i in fobj:
         fwrite.write(i[:i.index('#')])
+    fwrite.write('\n')
 
     fwrite.close()
     closefile(fobj)
