@@ -3,6 +3,10 @@
 ## 03/22/17 - Added core file count and core file names to be written in systemdetails.txt
 ## 03/22/17 - Added SEVERE in the list of search string
 ## 03/22/17 - Added latest backtrace file info in errorsandwarns.txt
+## 04/04/17 - Comment to look into errorsandwarns for backtrace on latest core
+## 04/05/17 - Added system info to systemdetails.txt from bios_serial_number.txt
+## 04/06/17 - Added Physical Drives status and count from storcli.txt to systemdetails.txt
+##            (Bad code - remove harcoding of index values and arthimetic to get the index value)
 ####################################################################################################################
 
 import os
@@ -104,7 +108,8 @@ def coredetails(cdmpfiles):
     fwrite.write('\n***** Core Files summary ***** \n')    
 
     cdmpcnt = len(cdmpfiles)
-    fwrite.write(str(cdmpcnt))
+    fwrite.write('Total Number of cores: '+str(cdmpcnt)+'\n')
+    fwrite.write('--For backtrace on latest core file please look in errorsandwarns.txt \n')
 
     for logfile in cdmpfiles:
         fwrite.write('\n')
@@ -260,6 +265,45 @@ def supervisorstatus(logfile):
 
     fwrite.close()
     closefile(fobj)
+
+def sysinfo(logfile):
+    fobj = openfile(logfile)
+
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n****** System Info *****\n')
+
+    for i in fobj:
+        if((i.strip().find('Serial Number:')!=-1) or (i.strip().find('Product Name:')!=-1)or (i.strip().find('UUID:')!=-1)):
+            fwrite.write(i.strip()+'\n')
+
+    fwrite.close()
+    closefile(fobj)            
+
+def storcli(logfile):
+    searchstring = 'PD LIST :\n'
+    fobj = openfile(logfile)
+
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n****** Drives status *****\n')
+
+    for i in fobj:
+        if i.find('Physical Drives')!=-1:
+            fwrite.write(i)
+
+    fo = openfile(logfile)
+    lines = fo.readlines()
+
+    if searchstring in lines:
+        lines = lines[lines.index(searchstring)+3:]
+
+        for x in lines:
+            fwrite.write(x)
+    else:
+        fwrite.write('No Physical Drives \n')
+    
+    fwrite.close()
+    closefile(fobj)
+    closefile(fo)
     
 ##Function to get configuration and other system details
 def configdetails(logfile):
@@ -281,6 +325,12 @@ def configdetails(logfile):
                     else:
                         if (logfile.find('supervisorctl_status.txt')!=-1):
                             supervisorstatus(logfile)
+                        else:
+                            if (logfile.find('bios_serial_number.txt')!=-1):
+                                sysinfo(logfile)
+                            else:
+                                if(logfile.find('storcli.txt')!=-1):
+                                    storcli(logfile)
         
 ##Main function
 def main():
