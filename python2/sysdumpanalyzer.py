@@ -7,6 +7,8 @@
 ## 04/05/17 - Added system info to systemdetails.txt from bios_serial_number.txt
 ## 04/06/17 - Added Physical Drives status and count from storcli.txt to systemdetails.txt
 ##            (Bad code - remove harcoding of index values and arthimetic to get the index value)
+## 04/07/17 - Added version of code to be pulled from .yaml files in opt/versions.
+##            Check if more necessary details can be pulled from list of available yaml files
 ####################################################################################################################
 
 import os
@@ -73,6 +75,7 @@ def navigatefolders():
     filelist = []
     configfiles = []
     corefiles = []
+    yamlfiles = []
     folderstoread = ['coredumps']
     
     
@@ -85,10 +88,17 @@ def navigatefolders():
                     else:
                         if (x.endswith('.log') or x.endswith('.out')):
                             filelist.append(os.path.join(os.path.abspath(path),x))
+                        else:
+                            if (x.endswith('.yaml')):
+                                yamlfiles.append(os.path.join(os.path.abspath(path),x))
 
     for logfile in filelist:
         print('Processing ',logfile)
         errorsandwarns(logfile)
+
+    for logfile in yamlfiles:
+        if logfile.find('versions')!=-1:
+            yamls(logfile)
     
     for logfile in configfiles:
         #print(logfile)
@@ -276,6 +286,8 @@ def sysinfo(logfile):
         if((i.strip().find('Serial Number:')!=-1) or (i.strip().find('Product Name:')!=-1)or (i.strip().find('UUID:')!=-1)):
             fwrite.write(i.strip()+'\n')
 
+    fwrite.write(version+'\n')
+
     fwrite.close()
     closefile(fobj)            
 
@@ -304,7 +316,23 @@ def storcli(logfile):
     fwrite.close()
     closefile(fobj)
     closefile(fo)
+
+def codeversion(logfile):
+    global version
+    fobj = openfile(logfile)
     
+    for i in fobj:
+        if i.find('version:')!=-1:
+            version = i.strip()
+            
+    return version
+    
+##Function to get details from yaml version files
+def yamls(logfile):
+    if (logfile.find('ver-appliance.yaml')!=-1):
+        codeversion(logfile)
+    
+
 ##Function to get configuration and other system details
 def configdetails(logfile):
     
