@@ -11,7 +11,7 @@ The script when completed succesfully will generate 5 files - 2 .txt files and 3
 Text Files - xxxxx_errorsandwarns.txt and xxxxx_systemdetails.txt
 Dat Files - xxxxx_mem.dat, xxxxx_cpu.dat, xxxxx_probe.dat
 
-What do the files contain?
+What do the output files contain?
 
 xxxxx_errorsandwarns.txt - Contains ERRORS, WARNINGS in all the logs files inside the sysdump
 xxxxx_systemdetails.txt  - Contains system level details from the AR11 appliance
