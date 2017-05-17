@@ -9,6 +9,20 @@
 ##            (Bad code - remove harcoding of index values and arthimetic to get the index value)
 ## 04/07/17 - Added version of code to be pulled from .yaml files in opt/versions.
 ##            Check if more necessary details can be pulled from list of available yaml files
+## 04/11/17 - movefiles function to move the output files to loaction of the tar file.
+##            check with EE's -
+##                          A. Keep the same location and add case#
+##                          B. Move the file to tar file location where they create a folder for each case
+## 04/12/17 - Added case number to be entered which is appended to output files
+##            Cleaning up unzipped folder
+## 04/13/17 - Moving output files to location of the dump file. If the file exists remove the existing file
+##            and move the new file.
+## 04/14/17 - Ran into 'UnicodeDecodeError' when opening 'temporal_data_store_rmp-reportmanagerd.log'
+##            (\data\log\temporal_data_store\)
+##            Added try catch block to catch the exception and skip the file which have different encoding
+##            Changed number of lines from backtrace to be written from 70 to 100
+## 05/16/17 - Get list of .sqlite files. Function to connect to dabatase. Currently we have only metrics.sqlite
+##            Generating 3 dat files for cpu,memory and probe.
 ####################################################################################################################
 
 import os
@@ -17,12 +31,6 @@ import sqlite3
 import tarfile
 import shutil
 import stat
-
-global filename
-global systemdetails
-filename = 'errorsandwarns.txt'
-systemdetails = 'systemdetails.txt'
-
 
 def del_rw(action, name, exc):
     os.chmod(name, stat.S_IWRITE)
@@ -40,10 +48,9 @@ def cleanup():
             print('Deleting folder',os.path.abspath(fdname))
             shutil.rmtree(os.path.abspath(fdname),ignore_errors=False,onerror=del_rw)
 
-    print('Removing prior',filename)
 
     for fname in os.listdir(cwd):
-        if fname.endswith('.txt'):
+        if fname.endswith('.txt') or fname.endswith('.dat'):
             os.remove(fname)
 
 ##Unzip the diag bundle zip file
@@ -67,7 +74,70 @@ def openfile(file):
 def closefile(fobj):
     fobj.close()
 
+##Connect to metrics database
+def dbconnect(logfile):
 
+    if (os.path.exists(logfile)):
+
+        print('Connection to db succeeded...')
+        conn = sqlite3.connect(logfile)
+        c = conn.cursor()
+        
+    else:
+
+        print('Database File does not exists..\n')
+        conn = ' '
+        c = ' '
+
+    return conn,c
+
+##Close database connection
+def dbclose(conn):
+    conn.close()
+
+##Function to get cpu data sorted by time
+def cpudata(conn,c):
+
+        c.execute("select datetime(timestamp,'unixepoch','localtime') as datetime, avg(total) as average, avg(idle) as idle from cpu group by datetime(timestamp,'unixepoch') order by datetime(timestamp,'unixepoch')")
+        list = c.fetchall()
+
+        fwrite = open(cpu,'a')
+        fwrite.write('(datetime , total , idle) \n')
+        for x in range(0,len(list)):
+            fwrite.write(str(list[x]).strip('()')+'\n')
+        fwrite.close()
+        
+        return list
+
+##Function to get memory data sorted by time
+def memdata(conn,c):
+
+        c.execute("SELECT datetime(timestamp,'unixepoch','localtime') as datetime,memfree,cached,active FROM memory order by datetime(timestamp,'unixepoch')")
+        list = c.fetchall()
+
+        fwrite = open(mem,'a')
+        fwrite.write('(datetime, memfree, cached, active) \n')
+        for x in range(0,len(list)):
+            fwrite.write(str(list[x]).strip('()')+'\n')
+        fwrite.close()
+        
+        return list
+
+##Function to get probe data sorted by time
+def probedata(conn,c):
+
+    c.execute("select datetime(timestamp, 'unixepoch', 'localtime') as datetime, tcp_opened_connections_rate, tcp_active_connections_rate, tcp_timeout_connections_rate, tcp_closed_connections_rate, udp_started_flows_rate, udp_active_flows_rate, udp_timeout_flows_rate, tcp_connections_duration, udp_flows_duration, http_response_body_size, http_response_rate, http_request_body_size, http_request_rate, http_dropped_url_objects_rate, ssl_conns, ssl_conns_with_errors, ssl_handshake_success, ssl_bad_certificate, ssl_missing_key, ssl_non_rsa, ssl_session_restored, ssl_session_cache_hit, ssl_session_cache_miss, ssl_session_cache_max_entries, ssl_cert_cache_hit, ssl_cert_cache_miss, ssl_cert_cache_max_entries, ssl_gap_in_conn, packets_received, packets_dropped from probe order by timestamp")
+    list = c.fetchall()
+
+    fwrite = open(probe,'a')
+    fwrite.write('(datetime, tcp_opened_connections_rate, tcp_active_connections_rate, tcp_timeout_connections_rate, tcp_closed_connections_rate, udp_started_flows_rate, udp_active_flows_rate, udp_timeout_flows_rate, tcp_connections_duration, udp_flows_duration, http_response_body_size, http_response_rate, http_request_body_size, http_request_rate, http_dropped_url_objects_rate, ssl_conns, ssl_conns_with_errors, ssl_handshake_success, ssl_bad_certificate, ssl_missing_key, ssl_non_rsa, ssl_session_restored, ssl_session_cache_hit, ssl_session_cache_miss, ssl_session_cache_max_entries, ssl_cert_cache_hit, ssl_cert_cache_miss, ssl_cert_cache_max_entries, ssl_gap_in_conn, packets_received, packets_dropped) \n')
+    for x in range(0,len(list)):
+        fwrite.write(str(list[x]).strip('()')+'\n')
+    fwrite.close()
+        
+    return list
+
+    
 #Directory walk of the extracted bundle and build list for config,log,core files
 def navigatefolders():
     
@@ -76,6 +146,7 @@ def navigatefolders():
     configfiles = []
     corefiles = []
     yamlfiles = []
+    sqlfiles = []
     folderstoread = ['coredumps']
     
     
@@ -91,6 +162,9 @@ def navigatefolders():
                         else:
                             if (x.endswith('.yaml')):
                                 yamlfiles.append(os.path.join(os.path.abspath(path),x))
+                            else:
+                                if(x.endswith('.sqlite')):
+                                    sqlfiles.append(os.path.join(os.path.abspath(path),x))
 
     for logfile in filelist:
         print('Processing ',logfile)
@@ -111,6 +185,17 @@ def navigatefolders():
                 corefiles.append(logfile)
 
     coredetails(corefiles)
+
+    for logfile in sqlfiles:
+        print(logfile)
+        conn, c = dbconnect(logfile)
+
+        if ((conn != ' ') and (c !=' ')):
+            cpudata(conn,c)
+            memdata(conn,c)
+            probedata(conn,c)
+            
+            dbclose(conn)
 
 ##Function to write core file count and list to systemdetails file
 def coredetails(cdmpfiles):
@@ -136,7 +221,7 @@ def coredetails(cdmpfiles):
 
 ##Write first 70 lines backtrace from latest core file
 def backtraceltst(crdmpltst):
-    n = 70
+    n = 100
     fobj = openfile(crdmpltst)
 
     fwrite = open(filename,'a')
@@ -163,13 +248,17 @@ def errorsandwarns(logfile):
         fwrite = open(filename,'a')
         fwrite.write('\n'+'******Errors and Warnings in file '+ str(logfile)+'******' + '\n\n')
 
-        for i in fobj:
-            for string in searchstrings:
-                if string in i.strip():
-                    fwrite.write(i)
+        try:
+            for i in fobj:
+                for string in searchstrings:
+                    if string in i.strip():
+                        fwrite.write(i)
 
-        fobj.close()
-        fwrite.close()
+            fobj.close()
+            fwrite.close()
+
+        except UnicodeDecodeError:
+            print('Skipping ',logfile)
             
     except FileNotFoundError:
         print(logfile,'File does not exist...\n')
@@ -359,16 +448,50 @@ def configdetails(logfile):
                             else:
                                 if(logfile.find('storcli.txt')!=-1):
                                     storcli(logfile)
-        
+
+##Function to move files to location where the bundle is present
+def movefiles(path):
+    cwd = os.getcwd()
+    dst = os.path.abspath(os.path.dirname(path))
+    
+    for file in os.listdir(os.getcwd()):
+        filelist = (os.path.join(os.path.abspath(file),dst))
+        if ((file.endswith('.txt') or file.endswith('.dat')) and (file.find('probe')!=-1 or file.find('mem')!=-1 or file.find('cpu')!=-1 or file.find('errorsandwarns')!=-1 or file.find('systemdetails')!=-1)):
+            try:
+                print('Moving '+os.path.abspath(file)+' to '+dst)
+                shutil.move(os.path.abspath(file),dst)
+            except IOError:
+                 print(file+' already exists...Removing file')
+                 os.remove(os.path.join(dst,file))
+                 shutil.move(os.path.abspath(file),dst)
+
+                
 ##Main function
 def main():
-
+    global filename
+    global systemdetails
+    global cpu
+    global mem
+    global probe
+    
     cleanup()
     
     print('Enter the full path to AS bundle zip file :')
     path = raw_input()
 
+    print('Enter the case number :')
+    casenum = raw_input()
+
+    filename = str(casenum)+'_'+'errorsandwarns.txt'
+    systemdetails = str(casenum)+'_'+'systemdetails.txt'
+    cpu = str(casenum)+'_'+'cpu.dat'
+    mem = str(casenum)+'_'+'mem.dat'
+    probe = str(casenum)+'_'+'probe.dat'
+    
     unzip(path)
     navigatefolders()
+        
+    movefiles(path)
+    cleanup()
     
 main()
