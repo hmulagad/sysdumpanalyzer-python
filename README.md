@@ -1,23 +1,39 @@
 # sysdumpanalyzer-python
-sysdumpanalyzer for AR11 - Iteration1
+sysdumpanalyzer for AR11
 
-This is a script which extracts and reads all the log and text files to list the errors and warnings in the logs along with some configuration
-details from the AppResponse 11 appliance.
+What the script does?
 
-The script generates 2 output files after it finishes running and leaves the extracted bundle files/folders. The 2 output files will be
-named - errorsandwarns.txt and systemdetails.txt.
+The script extracts the sysdump file and reads all the logs and config files to gather system information and
+also errors and warnings in the log files present in the sysdump.
 
-Steps on running the script:
+The script when completed succesfully will generate 5 files - 2 .txt files and 3 .dat files
 
-Install Python 2.7 or higher or place the script where you have python installed
-Run the script and it enter the location of the system dump from AR11.
-The script will unzip the sysdump in the same location where you placed the script.
-The script will also create the 2 output files mentioned above in the same location where the script is located.
+Text Files - xxxxx_errorsandwarns.txt and xxxxx_systemdetails.txt
+Dat Files - xxxxx_mem.dat, xxxxx_cpu.dat, xxxxx_probe.dat
 
-NOTE:
+What do the files contain?
 
---Please use script in python2 if you are running python version 2.7 or higher but lower than 3.0
---Please use script in python3 if you are running python version 3.0.
+xxxxx_errorsandwarns.txt - Contains ERRORS, WARNINGS in all the logs files inside the sysdump
+xxxxx_systemdetails.txt  - Contains system level details from the AR11 appliance
 
---The script when ran will delete all folders and .txt files from previous run so please make sure you save the unzipped folders/files
-and output files before analyzing a new system dump.
+xxxxx_mem.dat - Use this file to plot Memory values as charts (comma separated values) 
+xxxxx_cpu.dat - Use this file to plot CPU values as charts (comma separated values) 
+xxxxx_probe.dat - Use this file to plot PROBE values as charts (comma separated values) 
+
+The script does not currently plot any charts. You can use utilities like gnuplot and use the above .dat files
+to plot the details you need.
+
+How do we run the script?
+
+You can either use Python 2.x(x >=7) or Python 3.x to run the script. Please downloand the appropriate file as we have
+separate files for Python 2.x and Python 3.x.
+
+-- Place the script which you have downloaded in a folder (DO NOT PLACE THE SCRIPT IN THE SAME LOCATION AS SYSDUMPS)
+-- Run the script using python command
+-- Enter the fullpath along with sysdump file name
+-- Enter the case number associated with sysdump
+-- Hit enter and let the script run
+
+The output files should be created in the same location where the sysdump is located
+
+
