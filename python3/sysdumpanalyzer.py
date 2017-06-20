@@ -23,6 +23,12 @@
 ##            Changed number of lines from backtrace to be written from 70 to 100
 ## 05/16/17 - Get list of .sqlite files. Function to connect to dabatase. Currently we have only metrics.sqlite
 ##            Generating 3 dat files for cpu,memory and probe.
+## 05/19/17 - Added check for case number. If entered case number is not numeric do not proceed until
+##            until valid numeric value is entered
+## 06/02/17 - Gripen will have log 'manage.log' for dbperf module which will give latest status of the module
+##            'Enabled' or 'Disabled'. Function to read the file and write the status
+##            Added logic to get list of '.json' and '.conf' files. Might be useful later
+## 06/20/17 - isnumeric is not a valid function in Python 2. Changed it to isdigit.
 ####################################################################################################################
 
 import os
@@ -147,6 +153,8 @@ def navigatefolders():
     corefiles = []
     yamlfiles = []
     sqlfiles = []
+    jsonfiles = []
+    conffiles = []
     folderstoread = ['coredumps']
     
     
@@ -154,7 +162,7 @@ def navigatefolders():
         if os.path.isdir(fdname):
             for path,subdirs,files in os.walk(os.path.abspath(fdname)):
                 for x in files:
-                    if (x.endswith('.txt')):
+                    if ((x.endswith('.txt')) or (x.find('manage.log')!=-1)):
                         configfiles.append(os.path.join(os.path.abspath(path),x))
                     else:
                         if (x.endswith('.log') or x.endswith('.out')):
@@ -165,6 +173,12 @@ def navigatefolders():
                             else:
                                 if(x.endswith('.sqlite')):
                                     sqlfiles.append(os.path.join(os.path.abspath(path),x))
+                                else:
+                                    if(x.endswith('.json')):
+                                        jsonfiles.append(os.path.join(os.path.abspath(path),x))
+                                    else:
+                                        if(x.endswith('.conf')):
+                                            conffiles.append(os.path.join(os.path.abspath(path),x))
 
     for logfile in filelist:
         print('Processing ',logfile)
@@ -420,8 +434,28 @@ def codeversion(logfile):
 def yamls(logfile):
     if (logfile.find('ver-appliance.yaml')!=-1):
         codeversion(logfile)
-    
 
+##Function to check if dbperf module is enabled or disabled - Gripen or later
+def dbperfen(logfile):
+    fobj = openfile(logfile)
+    lines = fobj.readlines()
+
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n***** DB Module *****\n')
+    
+    tmp = str(lines[-1])
+    
+    if tmp.find('enable'):
+        fwrite.write('Is dbperf module enabled : True \n')
+        fwrite.write(tmp+'\n')
+    else:
+        fwrite.write('Is dbperf module enabled : False \n')
+        fwrite.write(tmp+'\n')
+
+    fwrite.close()
+    closefile(fobj)
+
+    
 ##Function to get configuration and other system details
 def configdetails(logfile):
     
@@ -448,6 +482,9 @@ def configdetails(logfile):
                             else:
                                 if(logfile.find('storcli.txt')!=-1):
                                     storcli(logfile)
+                                else:
+                                    if(logfile.find('manage.log')!=-1):
+                                        dbperfen(logfile)
 
 ##Function to move files to location where the bundle is present
 def movefiles(path):
@@ -479,8 +516,12 @@ def main():
     print('Enter the full path to AS bundle zip file :')
     path = input()
 
-    print('Enter the case number :')
-    casenum = input()
+    while True:
+        print('Enter valid case number :')
+        casenum = input()
+
+        if casenum.isdigit():
+            break
 
     filename = str(casenum)+'_'+'errorsandwarns.txt'
     systemdetails = str(casenum)+'_'+'systemdetails.txt'
