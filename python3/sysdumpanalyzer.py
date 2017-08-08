@@ -29,6 +29,21 @@
 ##            'Enabled' or 'Disabled'. Function to read the file and write the status
 ##            Added logic to get list of '.json' and '.conf' files. Might be useful later
 ## 06/20/17 - isnumeric is not a valid function in Python 2. Changed it to isdigit.
+## 07/13/17 - Changed logic to pick the first core file from the list instead of last. The list sorted. So we should
+##            get the latest core dump and not the oldest
+## 08/03/17 - Added logic to look into feature status file to get the latest status of modules and licensing
+##            Added logic to print dbperf history like when was it enabled/disabled etc from manage.log
+## 08/07/17 - Added logic to get the latest core dumps for each process and write the back trace of latest dump for each
+##            only. The previous logic added 07/13 is faulty.
+####################################################################################################################
+
+####################################################################################################################
+                                        ##############TO DO#############
+
+## 07/20/17 - Found storcli_calls_show.txt. Added same storcli logic but that does not work completely. Find out if this
+##            for Gripen or specific models and add logic. Currently calling storcli logic for this file too.
+## 08/07/17 - Running into 'AttributeError: 'NoneType' object has no attribute 'start' '. This happens in coredump function
+##            at pos = re.search("\d",tmp).start()
 ####################################################################################################################
 
 import os
@@ -200,40 +215,56 @@ def navigatefolders():
 
     coredetails(corefiles)
 
-    for logfile in sqlfiles:
-        print(logfile)
-        conn, c = dbconnect(logfile)
-
-        if ((conn != ' ') and (c !=' ')):
-            cpudata(conn,c)
-            memdata(conn,c)
-            probedata(conn,c)
-            
-            dbclose(conn)
+##    for logfile in sqlfiles:
+##        print(logfile)
+##        conn, c = dbconnect(logfile)
+##
+##        if ((conn != ' ') and (c !=' ')):
+##            cpudata(conn,c)
+##            memdata(conn,c)
+##            probedata(conn,c)
+##            
+##            dbclose(conn)
 
 ##Function to write core file count and list to systemdetails file
 def coredetails(cdmpfiles):
+    dict = {}
     fwrite = open(systemdetails,'a')
     fwrite.write('\n***** Core Files summary ***** \n')    
 
     cdmpcnt = len(cdmpfiles)
     fwrite.write('Total Number of cores: '+str(cdmpcnt)+'\n')
-    fwrite.write('--For backtrace on latest core file please look in errorsandwarns.txt \n')
+    fwrite.write('--For backtrace on latest core file(s) please look in errorsandwarns.txt \n')
 
-    for logfile in cdmpfiles:
-        fwrite.write('\n')
-        fwrite.write(logfile[logfile.index('coredump'):])
-    
+## Use this call to write list of all corefiles in the systemdetails
+##    for logfile in cdmpfiles:
+##        fwrite.write('\n')
+##        fwrite.write(logfile[logfile.index('coredump'):])
+
+    if cdmpcnt!=0:
+        cdmpfiles.sort()
+            
+        for s in cdmpfiles:
+            if s.find('backtrace')!=-1:
+                filelocidx = re.search('coredumps',s).start()
+                fileloc = s[:filelocidx]
+                
+                tmp = s[s.index('coredump'):]
+                pos = re.search("\d",tmp).start()
+                
+                k = tmp[:pos-1]
+                v = tmp[pos:]
+
+                dict.update({k:v})
+         
+        for key,value in dict.items():
+            fwrite.write('\n')
+            fwrite.write(key+'-'+value)
+            backtraceltst(os.path.abspath(fileloc+key+'-'+value))
+
     fwrite.close()
 
-    if len(cdmpfiles)!= 0:
-        cdmpfiles.sort()
-        crdmpltst = cdmpfiles[-1]
-
-        backtraceltst(crdmpltst)
-
-
-##Write first 70 lines backtrace from latest core file
+##Write first 100 lines backtrace from latest core file
 def backtraceltst(crdmpltst):
     n = 100
     fobj = openfile(crdmpltst)
@@ -246,7 +277,8 @@ def backtraceltst(crdmpltst):
 
     for i in range(1,n):
         line = fobj.readline()
-        fwrite.write(line)
+        if line.startswith('[New') == False:
+            fwrite.write(line)
         
     fwrite.close()
     closefile(fobj)
@@ -434,27 +466,37 @@ def codeversion(logfile):
 def yamls(logfile):
     if (logfile.find('ver-appliance.yaml')!=-1):
         codeversion(logfile)
-
-##Function to check if dbperf module is enabled or disabled - Gripen or later
-def dbperfen(logfile):
+    
+##Function to get history of dbperf module enabling/disabling - Gripen onwards
+def dbperfhis(logfile):
     fobj = openfile(logfile)
     lines = fobj.readlines()
 
     fwrite = open(systemdetails,'a')
-    fwrite.write('\n***** DB Module *****\n')
-    
-    tmp = str(lines[-1])
-    
-    if tmp.find('enable'):
-        fwrite.write('Is dbperf module enabled : True \n')
-        fwrite.write(tmp+'\n')
-    else:
-        fwrite.write('Is dbperf module enabled : False \n')
-        fwrite.write(tmp+'\n')
+    fwrite.write('\n***** DB Module history *****\n')
+
+    tmp = lines[-5:]
+
+    for n in tmp:
+        fwrite.write(n)
 
     fwrite.close()
     closefile(fobj)
+    
 
+##Function to get feature status - licensed and enabled features - Gripen onwards
+def featurestatus(logfile):
+    fobj = openfile(logfile)
+
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n***** Feature Status *****\n')
+
+    for i in fobj:
+        if(i.find('True')!=-1 or i.find('licensed')!=-1):
+            fwrite.write(i)
+
+    fwrite.close()
+    closefile(fobj)
     
 ##Function to get configuration and other system details
 def configdetails(logfile):
@@ -483,8 +525,14 @@ def configdetails(logfile):
                                 if(logfile.find('storcli.txt')!=-1):
                                     storcli(logfile)
                                 else:
-                                    if(logfile.find('manage.log')!=-1):
-                                        dbperfen(logfile)
+                                    if(logfile.find('feature_status.txt')!=-1):
+                                        featurestatus(logfile)
+                                    else:
+                                        if(logfile.find('storcli_call_show.txt')!=-1):
+                                            storcli(logfile)
+                                        else:
+                                            if(logfile.find('manage.log')!=-1):
+                                               dbperfhis(logfile) 
 
 ##Function to move files to location where the bundle is present
 def movefiles(path):
@@ -513,7 +561,7 @@ def main():
     
     cleanup()
     
-    print('Enter the full path to AS bundle zip file :')
+    print('Enter the full path to sysdump :')
     path = input()
 
     while True:
