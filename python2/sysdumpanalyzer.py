@@ -35,15 +35,35 @@
 ##            Added logic to print dbperf history like when was it enabled/disabled etc from manage.log
 ## 08/07/17 - Added logic to get the latest core dumps for each process and write the back trace of latest dump for each
 ##            only. The previous logic added 07/13 is faulty.
+## 08/10/17 - Added logic to get the approximate reboot time from boot.log.Currently we do not have lastb call in the sysdump. boot.log modified timestamp might
+##            be the best bet.
+## 08/21/17 - The script will unzip the sysdump in the same location as the sysdump
+##            No cleanup is being done. If the unzipped folder exist we continue with analysis
+##            No deleting folders at the start or end of the script. This was necessary earlier because .tgz was being
+##            unzipped locally and output files were created and then all folders were deleted
+##            Deleting only output files if they already exist
+##            Logic to count the number of hostgroups from JSON file
+## 08/28/17 - Added logic for openfile function to use encoding utf8 so it does not fail on opening any UNICODE
+##            files - e.g - hostgroup json
+## 09/06/17 - Added io.open since encoding ut8 option in openfile function will not work with python 2.x
+## 09/06/17 - Added except block to catch OSError since python 2.x does not support PermissionError
+## 09/06/17 - Tested placing the script in same location as sysdump and it does not change how the script runs nor does delete
+##            anything unnecessarily
+## 09/06/17 - Added logic to get the storage layout information
 ####################################################################################################################
 
 ####################################################################################################################
                                         ##############TO DO#############
 
+## 07/19/17 - Implement logic to check if the same error occurs more than once and write accoordingly. This is major change.
 ## 07/20/17 - Found storcli_calls_show.txt. Added same storcli logic but that does not work completely. Find out if this
-##            for Gripen or specific models and add logic. Currently calling storcli logic for this file too.
-## 08/07/17 - Running into 'AttributeError: 'NoneType' object has no attribute 'start' '. This happens in coredump function
-##            at pos = re.search("\d",tmp).start()
+##            for Gripen or specific models and add logic. Currently calling storcli logic for this file too
+## 08/09/17 - Timezone of the system. Need logic to get the timezone where the system is deployed
+## 08/21/17 - Test on Linux and python 2.6. Test placing the script in same folder as sysdumps
+## 09/05/17 - If the sysdump name is anything besides what the appliance generated then the script would fail.
+##            This is happening because we are constructing the working folder name based on the filename of the dump.
+##            If the file is different from the extracted folder name then obviously script does not find the folder
+##            and does not read any files.
 ####################################################################################################################
 
 import os
@@ -52,43 +72,78 @@ import sqlite3
 import tarfile
 import shutil
 import stat
+import time
+import io
 
 def del_rw(action, name, exc):
     os.chmod(name, stat.S_IWRITE)
     os.remove(name)
 
 ##Delete all previously extracted folders
-def cleanup():
+def cleanup(path,filename,systemdetails):
 
-    cwd = os.getcwd()
+    cwd = os.path.dirname(os.path.abspath(path))
+    os.chdir(cwd)
 
-    print('Deleting folders...')
-    
-    for fdname in os.listdir(cwd):
-        if os.path.isdir(os.path.abspath(fdname)):
-            print('Deleting folder',os.path.abspath(fdname))
-            shutil.rmtree(os.path.abspath(fdname),ignore_errors=False,onerror=del_rw)
+##    print('Deleting folders...')
+##    
+##    for fdname in os.listdir(cwd):
+##        if os.path.isdir(os.path.abspath(fdname)):
+##            print('Deleting folder',os.path.abspath(fdname))
+##            shutil.rmtree(os.path.abspath(fdname),ignore_errors=False,onerror=del_rw)
 
 
     for fname in os.listdir(cwd):
-        if fname.endswith('.txt') or fname.endswith('.dat'):
+        if (fname.find(filename)!=-1 or fname.find(systemdetails)!=-1):
+            print('File already exists...',fname)
+            print('Deleting file...',fname)
             os.remove(fname)
 
 ##Unzip the diag bundle zip file
+####def unzip1(filepath):
+####
+####    print('Unzipping bundle..')
+####    
+####    zfile = tarfile.open(filepath)
+####    zfile.extractall()
+####    zfile.close()
+####
+####    print('Finished unzipping the bundle...')
+
+##Unzip to same location where the bundle is present - TEST WORK IN PROGRESS
 def unzip(filepath):
 
-    print('Unzipping bundle..')
-    
-    zfile = tarfile.open(filepath)
-    zfile.extractall()
-    zfile.close()
+    extractpath = os.path.dirname(os.path.abspath(filepath))
 
+    print('Unzipping sysdump to... ',os.path.abspath(extractpath))
+
+    filename = os.path.basename(filepath)
+##    file_tar,file_tar_ext = os.path.splitext(filepath)
+##    file_untar, file_untar_ext = os.path.splitext(file_tar)
+    workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
+
+##    print('PROPER DIR: ',workdir)
+
+    os.chdir(extractpath)
+
+    try:
+        zfile = tarfile.open(filepath)
+        zfile.extractall(os.path.abspath(extractpath))
+    except PermissionError:
+        pass
+##        print('Sysdump already unzipped.')
+
+    zfile.close()
+    
     print('Finished unzipping the bundle...')
+
+    return workdir
+
 
 ##Use to open a file for any function
 def openfile(file):
     print ('Reading file',file+'\n')
-    fobj = open(file)
+    fobj = io.open(file,encoding="utf8")
     return fobj
 
 ##Use to close a file for any function
@@ -116,53 +171,58 @@ def dbconnect(logfile):
 def dbclose(conn):
     conn.close()
 
-##Function to get cpu data sorted by time
-def cpudata(conn,c):
-
-        c.execute("select datetime(timestamp,'unixepoch','localtime') as datetime, avg(total) as average, avg(idle) as idle from cpu group by datetime(timestamp,'unixepoch') order by datetime(timestamp,'unixepoch')")
-        list = c.fetchall()
-
-        fwrite = open(cpu,'a')
-        fwrite.write('(datetime , total , idle) \n')
-        for x in range(0,len(list)):
-            fwrite.write(str(list[x]).strip('()')+'\n')
-        fwrite.close()
-        
-        return list
-
-##Function to get memory data sorted by time
-def memdata(conn,c):
-
-        c.execute("SELECT datetime(timestamp,'unixepoch','localtime') as datetime,memfree,cached,active FROM memory order by datetime(timestamp,'unixepoch')")
-        list = c.fetchall()
-
-        fwrite = open(mem,'a')
-        fwrite.write('(datetime, memfree, cached, active) \n')
-        for x in range(0,len(list)):
-            fwrite.write(str(list[x]).strip('()')+'\n')
-        fwrite.close()
-        
-        return list
-
-##Function to get probe data sorted by time
-def probedata(conn,c):
-
-    c.execute("select datetime(timestamp, 'unixepoch', 'localtime') as datetime, tcp_opened_connections_rate, tcp_active_connections_rate, tcp_timeout_connections_rate, tcp_closed_connections_rate, udp_started_flows_rate, udp_active_flows_rate, udp_timeout_flows_rate, tcp_connections_duration, udp_flows_duration, http_response_body_size, http_response_rate, http_request_body_size, http_request_rate, http_dropped_url_objects_rate, ssl_conns, ssl_conns_with_errors, ssl_handshake_success, ssl_bad_certificate, ssl_missing_key, ssl_non_rsa, ssl_session_restored, ssl_session_cache_hit, ssl_session_cache_miss, ssl_session_cache_max_entries, ssl_cert_cache_hit, ssl_cert_cache_miss, ssl_cert_cache_max_entries, ssl_gap_in_conn, packets_received, packets_dropped from probe order by timestamp")
-    list = c.fetchall()
-
-    fwrite = open(probe,'a')
-    fwrite.write('(datetime, tcp_opened_connections_rate, tcp_active_connections_rate, tcp_timeout_connections_rate, tcp_closed_connections_rate, udp_started_flows_rate, udp_active_flows_rate, udp_timeout_flows_rate, tcp_connections_duration, udp_flows_duration, http_response_body_size, http_response_rate, http_request_body_size, http_request_rate, http_dropped_url_objects_rate, ssl_conns, ssl_conns_with_errors, ssl_handshake_success, ssl_bad_certificate, ssl_missing_key, ssl_non_rsa, ssl_session_restored, ssl_session_cache_hit, ssl_session_cache_miss, ssl_session_cache_max_entries, ssl_cert_cache_hit, ssl_cert_cache_miss, ssl_cert_cache_max_entries, ssl_gap_in_conn, packets_received, packets_dropped) \n')
-    for x in range(0,len(list)):
-        fwrite.write(str(list[x]).strip('()')+'\n')
-    fwrite.close()
-        
-    return list
+####Function to get cpu data sorted by time
+##def cpudata(conn,c):
+##
+##        c.execute("select datetime(timestamp,'unixepoch','localtime') as datetime, avg(total) as average, avg(idle) as idle from cpu group by datetime(timestamp,'unixepoch') order by datetime(timestamp,'unixepoch')")
+##        list = c.fetchall()
+##
+##        fwrite = open(cpu,'a')
+##        fwrite.write('(datetime , total , idle) \n')
+##        for x in range(0,len(list)):
+##            fwrite.write(str(list[x]).strip('()')+'\n')
+##        fwrite.close()
+##        
+##        return list
+##
+####Function to get memory data sorted by time
+##def memdata(conn,c):
+##
+##        c.execute("SELECT datetime(timestamp,'unixepoch','localtime') as datetime,memfree,cached,active FROM memory order by datetime(timestamp,'unixepoch')")
+##        list = c.fetchall()
+##
+##        fwrite = open(mem,'a')
+##        fwrite.write('(datetime, memfree, cached, active) \n')
+##        for x in range(0,len(list)):
+##            fwrite.write(str(list[x]).strip('()')+'\n')
+##        fwrite.close()
+##        
+##        return list
+##
+####Function to get probe data sorted by time
+##def probedata(conn,c):
+##
+##    c.execute("select datetime(timestamp, 'unixepoch', 'localtime') as datetime, tcp_opened_connections_rate, tcp_active_connections_rate, tcp_timeout_connections_rate, tcp_closed_connections_rate, udp_started_flows_rate, udp_active_flows_rate, udp_timeout_flows_rate, tcp_connections_duration, udp_flows_duration, http_response_body_size, http_response_rate, http_request_body_size, http_request_rate, http_dropped_url_objects_rate, ssl_conns, ssl_conns_with_errors, ssl_handshake_success, ssl_bad_certificate, ssl_missing_key, ssl_non_rsa, ssl_session_restored, ssl_session_cache_hit, ssl_session_cache_miss, ssl_session_cache_max_entries, ssl_cert_cache_hit, ssl_cert_cache_miss, ssl_cert_cache_max_entries, ssl_gap_in_conn, packets_received, packets_dropped from probe order by timestamp")
+##    list = c.fetchall()
+##
+##    fwrite = open(probe,'a')
+##    fwrite.write('(datetime, tcp_opened_connections_rate, tcp_active_connections_rate, tcp_timeout_connections_rate, tcp_closed_connections_rate, udp_started_flows_rate, udp_active_flows_rate, udp_timeout_flows_rate, tcp_connections_duration, udp_flows_duration, http_response_body_size, http_response_rate, http_request_body_size, http_request_rate, http_dropped_url_objects_rate, ssl_conns, ssl_conns_with_errors, ssl_handshake_success, ssl_bad_certificate, ssl_missing_key, ssl_non_rsa, ssl_session_restored, ssl_session_cache_hit, ssl_session_cache_miss, ssl_session_cache_max_entries, ssl_cert_cache_hit, ssl_cert_cache_miss, ssl_cert_cache_max_entries, ssl_gap_in_conn, packets_received, packets_dropped) \n')
+##    for x in range(0,len(list)):
+##        fwrite.write(str(list[x]).strip('()')+'\n')
+##    fwrite.close()
+##        
+##    return list
 
     
 #Directory walk of the extracted bundle and build list for config,log,core files
-def navigatefolders():
+def navigatefolders(workdir):
     
-    cwd = os.getcwd()
+    ##cwd = os.getcwd()
+    cwd = os.path.abspath(os.path.dirname(workdir))
+    os.chdir(cwd)
+
+    print('Currently working in...' ,cwd)
+    
     filelist = []
     configfiles = []
     corefiles = []
@@ -174,14 +234,18 @@ def navigatefolders():
     
     
     for fdname in os.listdir(cwd):
-        if os.path.isdir(fdname):
+        if (os.path.isdir(fdname) and os.path.abspath(fdname)== workdir):
             for path,subdirs,files in os.walk(os.path.abspath(fdname)):
                 for x in files:
                     if ((x.endswith('.txt')) or (x.find('manage.log')!=-1)):
                         configfiles.append(os.path.join(os.path.abspath(path),x))
                     else:
                         if (x.endswith('.log') or x.endswith('.out')):
-                            filelist.append(os.path.join(os.path.abspath(path),x))
+                            if(x.find('boot.log')!=-1):
+                                filelist.append(os.path.join(os.path.abspath(path),x))
+                                configfiles.append(os.path.join(os.path.abspath(path),x))
+                            else:
+                                filelist.append(os.path.join(os.path.abspath(path),x))
                         else:
                             if (x.endswith('.yaml')):
                                 yamlfiles.append(os.path.join(os.path.abspath(path),x))
@@ -200,12 +264,18 @@ def navigatefolders():
         errorsandwarns(logfile)
 
     for logfile in yamlfiles:
-        if logfile.find('versions')!=-1:
+        if(logfile.find('versions')!=-1 or logfile.find('npm_data_manager')!=-1):
             yamls(logfile)
     
     for logfile in configfiles:
         #print(logfile)
         configdetails(logfile)
+
+    for logfile in jsonfiles:
+        jsonparse(logfile)
+
+    for logfile in conffiles:
+        confiles(logfile)
 
 ##Get list of all core files
     for logfile in configfiles:
@@ -433,6 +503,8 @@ def storcli(logfile):
     fwrite = open(systemdetails,'a')
     fwrite.write('\n****** Drives status *****\n')
 
+    fwrite.write(str(layout)+'\n')
+    
     for i in fobj:
         if i.find('Physical Drives')!=-1:
             fwrite.write(i)
@@ -452,6 +524,7 @@ def storcli(logfile):
     closefile(fobj)
     closefile(fo)
 
+#Function to get the version of the code
 def codeversion(logfile):
     global version
     fobj = openfile(logfile)
@@ -461,11 +534,24 @@ def codeversion(logfile):
             version = i.strip()
             
     return version
-    
+
+#Function to get the Storage layout
+def layout(logfile):
+    global layout
+    fobj = openfile(logfile)
+
+    for i in fobj:
+        if i.find('layout:')!=-1:
+            layout = i.strip()
+
+    return layout
+
 ##Function to get details from yaml version files
 def yamls(logfile):
     if (logfile.find('ver-appliance.yaml')!=-1):
         codeversion(logfile)
+    elif (logfile.find('layout.yaml')!=-1):
+        layout(logfile)
     
 ##Function to get history of dbperf module enabling/disabling - Gripen onwards
 def dbperfhis(logfile):
@@ -497,7 +583,63 @@ def featurestatus(logfile):
 
     fwrite.close()
     closefile(fobj)
-    
+
+##Function to get the approximate last reboot of the system
+def lastreb(logfile):
+    fobj = openfile(logfile)
+
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n***** Approximate reboot time *****\n')
+
+    reboottime = time.strftime("%a, %d %b %Y %H:%M:%S %Z", time.localtime(os.path.getmtime(logfile)))
+    ##reboottime = str(os.path.getmtime(logfile))
+    fwrite.write(reboottime+'\n')
+
+    fwrite.close()
+    closefile(fobj)
+
+##Function to get the count of hostgroups
+def hostgroups(logfile):
+        x = 0
+        fobj = openfile(logfile)
+
+        fwrite = open(systemdetails,'a')
+        fwrite.write('\n***** Number of hostgroups *****\n')
+
+        for n in fobj:
+            if(n.find('"id"')!=-1):
+                x = x+1
+        fwrite.write(str(x)+'\n')
+
+        fwrite.close()
+        closefile(fobj)
+
+##Function to check existence of slab settings file
+def bug288879(logfile):
+    fobj  = openfile(logfile)
+
+    fwrite = open(systemdetails,'a')
+    fwrite.write('\n********BUG 288879********\n')
+    fwrite.write('\n Please take a look at "https://bugzilla.nbttech.com/show_bug.cgi?id=288879"')
+    fwrite.write('\n If the system has been upgraded from Eagle+ to later release the appliance will hit this bug.')
+    fwrite.write('\n The file is slab_pool.conf and is not needed in Gripen and higher versions. \n')
+    fwrite.write('\n The file is located at - '+logfile+'\n')
+
+    fwrite.close()
+    closefile(fobj)
+
+
+##Function to parse JSON file
+def jsonparse(logfile):
+    if(logfile.find('hostgroup-settings.json')!=-1):
+        hostgroups(logfile)
+
+##Function to go through all .conf files
+def confiles(logfile):
+    if (logfile.find('slab_pool.conf')!=-1):
+        bug288879(logfile)
+
+        
 ##Function to get configuration and other system details
 def configdetails(logfile):
     
@@ -532,23 +674,25 @@ def configdetails(logfile):
                                             storcli(logfile)
                                         else:
                                             if(logfile.find('manage.log')!=-1):
-                                               dbperfhis(logfile) 
-
+                                               dbperfhis(logfile)
+                                            else:
+                                                if(logfile.find('boot.log')!=-1):
+                                                    lastreb(logfile)
 ##Function to move files to location where the bundle is present
-def movefiles(path):
-    cwd = os.getcwd()
-    dst = os.path.abspath(os.path.dirname(path))
-    
-    for file in os.listdir(os.getcwd()):
-        filelist = (os.path.join(os.path.abspath(file),dst))
-        if ((file.endswith('.txt') or file.endswith('.dat')) and (file.find('probe')!=-1 or file.find('mem')!=-1 or file.find('cpu')!=-1 or file.find('errorsandwarns')!=-1 or file.find('systemdetails')!=-1)):
-            try:
-                print('Moving '+os.path.abspath(file)+' to '+dst)
-                shutil.move(os.path.abspath(file),dst)
-            except IOError:
-                 print(file+' already exists...Removing file')
-                 os.remove(os.path.join(dst,file))
-                 shutil.move(os.path.abspath(file),dst)
+####def movefiles(path):
+####    cwd = os.getcwd()
+####    dst = os.path.abspath(os.path.dirname(path))
+####    
+####    for file in os.listdir(os.getcwd()):
+####        filelist = (os.path.join(os.path.abspath(file),dst))
+####        if ((file.endswith('.txt') or file.endswith('.dat')) and (file.find('probe')!=-1 or file.find('mem')!=-1 or file.find('cpu')!=-1 or file.find('errorsandwarns')!=-1 or file.find('systemdetails')!=-1)):
+####            try:
+####                print('Moving '+os.path.abspath(file)+' to '+dst)
+####                shutil.move(os.path.abspath(file),dst)
+####            except IOError:
+####                 print(file+' already exists...Removing file')
+####                 os.remove(os.path.join(dst,file))
+####                 shutil.move(os.path.abspath(file),dst)
 
                 
 ##Main function
@@ -558,8 +702,6 @@ def main():
     global cpu
     global mem
     global probe
-    
-    cleanup()
     
     print('Enter the full path to sysdump :')
     path = raw_input()
@@ -573,14 +715,14 @@ def main():
 
     filename = str(casenum)+'_'+'errorsandwarns.txt'
     systemdetails = str(casenum)+'_'+'systemdetails.txt'
-    cpu = str(casenum)+'_'+'cpu.dat'
-    mem = str(casenum)+'_'+'mem.dat'
-    probe = str(casenum)+'_'+'probe.dat'
-    
-    unzip(path)
-    navigatefolders()
+##    cpu = str(casenum)+'_'+'cpu.dat'
+##    mem = str(casenum)+'_'+'mem.dat'
+##    probe = str(casenum)+'_'+'probe.dat'
+    cleanup(path,filename,systemdetails)
+    workdir = unzip(path)
+    navigatefolders(workdir)
         
-    movefiles(path)
-    cleanup()
+##    movefiles(path)
+##    cleanup()
     
 main()
