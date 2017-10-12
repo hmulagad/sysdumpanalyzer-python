@@ -50,6 +50,9 @@
 ## 09/06/17 - Tested placing the script in same location as sysdump and it does not change how the script runs nor does delete
 ##            anything unnecessarily
 ## 09/06/17 - Added logic to get the storage layout information
+## 10/10/17 - Added logic to change permissions on the unzipped folder and files so other users can access
+##	      Added logic to look for rollup processor to determine possible probe hangs
+## 10/11/17 - Added logic to look for slab file messages to check the buffers in npm_capture
 ####################################################################################################################
 
 ####################################################################################################################
@@ -59,7 +62,6 @@
 ## 07/20/17 - Found storcli_calls_show.txt. Added same storcli logic but that does not work completely. Find out if this
 ##            for Gripen or specific models and add logic. Currently calling storcli logic for this file too
 ## 08/09/17 - Timezone of the system. Need logic to get the timezone where the system is deployed
-## 08/21/17 - Test on Linux and python 2.6. Test placing the script in same folder as sysdumps
 ## 09/05/17 - If the sysdump name is anything besides what the appliance generated then the script would fail.
 ##            This is happening because we are constructing the working folder name based on the filename of the dump.
 ##            If the file is different from the extracted folder name then obviously script does not find the folder
@@ -259,9 +261,6 @@ def navigatefolders(workdir):
                                         if(x.endswith('.conf')):
                                             conffiles.append(os.path.join(os.path.abspath(path),x))
 
-    for logfile in filelist:
-        print('Processing ',logfile)
-        errorsandwarns(logfile)
 
     for logfile in yamlfiles:
         if(logfile.find('versions')!=-1 or logfile.find('npm_data_manager')!=-1):
@@ -276,6 +275,21 @@ def navigatefolders(workdir):
 
     for logfile in conffiles:
         confiles(logfile)
+
+    for logfile in filelist:
+        if logfile.find('probe.log')!=-1:
+            print('Processing ',logfile)
+            probehang(logfile)
+            errorsandwarns(logfile)
+	else:
+	    if logfile.find('npm_capture.log')!=-1:
+	    	print('Processing ',logfile)
+		npmcpthang(logfile)
+		errorsandwarns(logfile)
+
+            else:
+           	 print('Processing ',logfile)
+		 errorsandwarns(logfile)
 
 ##Get list of all core files
     for logfile in configfiles:
@@ -295,6 +309,63 @@ def navigatefolders(workdir):
 ##            probedata(conn,c)
 ##            
 ##            dbclose(conn)
+
+
+#Function to check if there is a possible hang in the probe process
+def probehang(logfile):
+    line = 'Rollups processor: exported 0  basic connections - 0  tcp connections'
+    try:
+        fobj = openfile(logfile)
+        fwrite = open(systemdetails,'a')
+        ctnt = fobj.readlines()
+
+        fobj.close()
+
+        match = [s for s in ctnt if line in s]
+        
+        if len(match)>0:
+            fwrite.write('\n***** Probe hangs ***** \n')
+            if len(match)<20:
+                fwrite.write(line + ' occured ' + str(len(match))+ ' times (probably OK) \n')
+            else:
+                fwrite.write(line + ' occured ' + str(len(match))+ ' times \n')
+
+            fwrite.write('Indicates worker queues maxing out. Might cause probe hangs. \n')
+            fwrite.write('Please take look into probe.log for more details. \n')
+
+        fwrite.close()
+            
+    except UnicodeDecodeError:
+        print('Unable to open file... ',logfile)
+
+
+##Function to check if there is a possible issue with npm capture dropping traffic because of buffrer overflows
+def npmcpthang(logfile):
+	line = 'Pool default_write_pool has 1 free slabs'
+	try:
+	    fobj = openfile(logfile)
+	    fwrite = open(systemdetails,'a')
+	    ctnt = fobj.readlines()
+	    
+	    fobj.close()
+	    
+	    match = [s for s in ctnt if line in s]
+	    
+ 	    if len(match)>0:
+		fwrite.write('\n***** npm capture hang and packets dropped ***** \n')
+		if len(match)<20:
+                    fwrite.write(line + ' event occured ' + str(len(match))+ ' times (probably OK) \n')
+                else:
+                    fwrite.write(line + ' event occured ' + str(len(match))+ ' times \n')
+                    
+		fwrite.write('Indicates that no buffering is available in npm_capture and packets might be dropped \n')
+		fwrite.write('Please check capture_slabpool table in the system metrics database to see if there are no \nfor long period of time. \n')
+	   
+	    fwrite.close()
+
+	except UnicodeDecodeError:
+		print('Unable to open file... ',logfile)
+
 
 ##Function to write core file count and list to systemdetails file
 def coredetails(cdmpfiles):
@@ -620,10 +691,10 @@ def bug288879(logfile):
 
     fwrite = open(systemdetails,'a')
     fwrite.write('\n********BUG 288879********\n')
-    fwrite.write('\n Please take a look at "https://bugzilla.nbttech.com/show_bug.cgi?id=288879"')
-    fwrite.write('\n If the system has been upgraded from Eagle+ to later release the appliance will hit this bug.')
-    fwrite.write('\n The file is slab_pool.conf and is not needed in Gripen and higher versions. \n')
-    fwrite.write('\n The file is located at - '+logfile+'\n')
+    fwrite.write('Please take a look at "https://bugzilla.nbttech.com/show_bug.cgi?id=288879"')
+    fwrite.write('\nIf the system has been upgraded from Eagle+ to later release the appliance will hit this bug.')
+    fwrite.write('\nThe file is slab_pool.conf and is not needed in Gripen and higher versions. \n')
+    fwrite.write('\nThe file is located at - '+logfile+'\n')
 
     fwrite.close()
     closefile(fobj)
@@ -639,6 +710,16 @@ def confiles(logfile):
     if (logfile.find('slab_pool.conf')!=-1):
         bug288879(logfile)
 
+##Function to change permissions
+def changeperm(fldrnm):
+	print('Changing permissions on folder and files in...',fldrnm)
+	
+	for root,dirs,files in os.walk(fldrnm):
+		for d in dirs:
+			os.chmod(os.path.join(root,d),0o755)
+		for f in files:
+			os.chmod(os.path.join(root,f),0o755)
+	return
         
 ##Function to get configuration and other system details
 def configdetails(logfile):
@@ -721,6 +802,7 @@ def main():
     cleanup(path,filename,systemdetails)
     workdir = unzip(path)
     navigatefolders(workdir)
+    changeperm(workdir)
         
 ##    movefiles(path)
 ##    cleanup()
