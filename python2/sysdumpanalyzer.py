@@ -53,6 +53,7 @@
 ## 10/10/17 - Added logic to change permissions on the unzipped folder and files so other users can access
 ##	      Added logic to look for rollup processor to determine possible probe hangs
 ## 10/11/17 - Added logic to look for slab file messages to check the buffers in npm_capture
+## 10/30/17 - Added logic to look for symptoms on BUG 291485
 ####################################################################################################################
 
 ####################################################################################################################
@@ -285,6 +286,7 @@ def navigatefolders(workdir):
 	    if logfile.find('npm_capture.log')!=-1:
 	    	print('Processing ',logfile)
 		npmcpthang(logfile)
+		bug291485(logfile,settingsconf)
 		errorsandwarns(logfile)
 
             else:
@@ -309,6 +311,44 @@ def navigatefolders(workdir):
 ##            probedata(conn,c)
 ##            
 ##            dbclose(conn)
+
+##Function to check packet broker misconfiguration
+def bug291485(logfile,settingsconf):
+    lines = ['with timestamps not synced with system clock','with timestamps in the past']
+    try:
+        fobj = openfile(logfile)
+        fwrite = open(systemdetails,'a')
+        ctnt = fobj.readlines()
+
+        fobj.close()
+        
+        for line in lines:
+            match = [s for s in ctnt if line in s]
+        
+        ##print(match)
+
+        if len(match)>0:
+            fwrite.write('\n*****BUG 291485***** \n')
+            fwrite.write('Indicates npm_capture may get stuck due to packet broker misconfiguration \n')
+            fwrite.write('Confirm with customer if they are using timestamping. Check settings.conf \n')
+            fwrite.write('Please take a look at "https://bugzilla.nbttech.com/show_bug.cgi?id=291485" \n')
+        
+    except UnicodeDecodeError:
+        print('Unable to open file... ',logfile)
+
+    try:
+        if (len(settingsconf)>0 and settingsconf.find('settings.conf')!=-1):
+            fobj = openfile(settingsconf)
+
+            for n in fobj:
+                if (n.find('ANUE')!=-1 or n.find('GIGAMON_TRAILER')!=-1):
+                    fwrite.write('Found '+ str(n.strip()) + ' in settings.conf file \n')
+                    fwrite.write('Change packet_broker configuration to NONE \n')
+
+        fwrite.close()
+        
+    except UnicodeDecodeError:
+        print('Unable to open file... ',settingsconf)
 
 
 #Function to check if there is a possible hang in the probe process
@@ -707,8 +747,14 @@ def jsonparse(logfile):
 
 ##Function to go through all .conf files
 def confiles(logfile):
+    global settingsconf
+    
     if (logfile.find('slab_pool.conf')!=-1):
         bug288879(logfile)
+    if(logfile.find('settings.conf')!=-1):
+        settingsconf = logfile
+
+    return settingsconf
 
 ##Function to change permissions
 def changeperm(fldrnm):
@@ -783,6 +829,7 @@ def main():
     global cpu
     global mem
     global probe
+    global settingsconf
     
     print('Enter the full path to sysdump :')
     path = raw_input()
@@ -796,6 +843,7 @@ def main():
 
     filename = str(casenum)+'_'+'errorsandwarns.txt'
     systemdetails = str(casenum)+'_'+'systemdetails.txt'
+    settingsconf = ''
 ##    cpu = str(casenum)+'_'+'cpu.dat'
 ##    mem = str(casenum)+'_'+'mem.dat'
 ##    probe = str(casenum)+'_'+'probe.dat'
