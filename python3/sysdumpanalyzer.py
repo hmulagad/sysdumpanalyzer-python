@@ -52,6 +52,8 @@
 ##            Added logic to look for rollup processor to determine possible probe hangs
 ## 10/11/17 - Added logic to look for slab file messages to check the buffers in npm_capture
 ## 10/30/17 - Added logic to look for symptoms on BUG 291485
+## 11/02/17 - Added logic to get the timezone of the apppliance from timezone.txt. The file is new from Harrier release
+## 11/03/17 - Added logic to extract and work in proper workdir. Harrier release changed the name of extracted folder.
 ####################################################################################################################
 
 ####################################################################################################################
@@ -137,6 +139,12 @@ def unzip(filepath):
     zfile.close()
     
     print('Finished unzipping the bundle...')
+
+    if filename.split('.')[0] in os.listdir(extractpath):
+        workdir = os.path.abspath(filename.split('.')[0])
+    else:
+        if filename[filename.index('sysdump'):].split('.')[0] in os.listdir(extractpath):
+            workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
 
     return workdir
 
@@ -608,6 +616,7 @@ def sysinfo(logfile):
             fwrite.write(i.strip()+'\n')
 
     fwrite.write(version+'\n')
+    fwrite.write('Timezone: '+str(timezone)+'\n')
 
     fwrite.close()
     closefile(fobj)            
@@ -639,6 +648,22 @@ def storcli(logfile):
     fwrite.close()
     closefile(fobj)
     closefile(fo)
+
+##Function to get the timezone of the appliance
+def timezone(logfile):
+    global timezone
+    fobj = openfile(logfile)
+
+    timezone = fobj.readlines()
+
+    if len(timezone)>0:
+        timezone = timezone[0]
+    else:
+        timezone = ('Unable to pull this detail for this release...')
+
+    fobj.close()
+
+    return timezone
 
 #Function to get the version of the code
 def codeversion(logfile):
@@ -802,6 +827,9 @@ def configdetails(logfile):
                                             else:
                                                 if(logfile.find('boot.log')!=-1):
                                                     lastreb(logfile)
+                                                else:
+                                                    if(logfile.find('timezone.txt')!=-1):
+                                                        timezone(logfile)
 ##Function to move files to location where the bundle is present
 ####def movefiles(path):
 ####    cwd = os.getcwd()

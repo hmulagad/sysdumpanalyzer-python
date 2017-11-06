@@ -1,5 +1,5 @@
 ####################################################################################################################
-##
+####################################################################################################################
 ## 03/22/17 - Added core file count and core file names to be written in systemdetails.txt
 ## 03/22/17 - Added SEVERE in the list of search string
 ## 03/22/17 - Added latest backtrace file info in errorsandwarns.txt
@@ -54,6 +54,8 @@
 ##	      Added logic to look for rollup processor to determine possible probe hangs
 ## 10/11/17 - Added logic to look for slab file messages to check the buffers in npm_capture
 ## 10/30/17 - Added logic to look for symptoms on BUG 291485
+## 11/02/17 - Added logic to get the timezone of the apppliance from timezone.txt. The file is new from Harrier release
+## 11/03/17 - Added logic to extract and work in proper workdir. Harrier release changed the name of extracted folder.
 ####################################################################################################################
 
 ####################################################################################################################
@@ -67,6 +69,7 @@
 ##            This is happening because we are constructing the working folder name based on the filename of the dump.
 ##            If the file is different from the extracted folder name then obviously script does not find the folder
 ##            and does not read any files.
+## 11/02/17 - If sysdump is already extracted then do not try to do chmod as it fails because of permissions and size of the file.
 ####################################################################################################################
 
 import os
@@ -113,7 +116,7 @@ def cleanup(path,filename,systemdetails):
 ####
 ####    print('Finished unzipping the bundle...')
 
-##Unzip to same location where the bundle is present - TEST WORK IN PROGRESS
+##Unzip to same location where the bundle is present
 def unzip(filepath):
 
     extractpath = os.path.dirname(os.path.abspath(filepath))
@@ -123,7 +126,7 @@ def unzip(filepath):
     filename = os.path.basename(filepath)
 ##    file_tar,file_tar_ext = os.path.splitext(filepath)
 ##    file_untar, file_untar_ext = os.path.splitext(file_tar)
-    workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
+##    workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
 
 ##    print('PROPER DIR: ',workdir)
 
@@ -139,6 +142,12 @@ def unzip(filepath):
     zfile.close()
     
     print('Finished unzipping the bundle...')
+    
+    if filename.split('.')[0] in os.listdir(extractpath):
+	workdir = os.path.abspath(filename.split('.')[0])
+    else:
+	if filename[filename.index('sysdump'):].split('.')[0] in os.listdir(extractpath):
+		workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
 
     return workdir
 
@@ -487,8 +496,12 @@ def errorsandwarns(logfile):
         except UnicodeDecodeError:
             print('Skipping ',logfile)
             
-    except FileNotFoundError:
-        print(logfile,'File does not exist...\n')
+    ##except FileNotFoundError:
+        ##print(logfile,'File does not exist...\n')
+
+    except Exception as e:
+	print('Unable to open file... ',str(e))
+	print('\n')
 
 ##Functions to get configuration and other details
 def netstat(logfile):
@@ -603,6 +616,7 @@ def sysinfo(logfile):
             fwrite.write(i.strip()+'\n')
 
     fwrite.write(version+'\n')
+    fwrite.write('Timezone: '+str(timezone)+'\n')
 
     fwrite.close()
     closefile(fobj)            
@@ -635,6 +649,22 @@ def storcli(logfile):
     closefile(fobj)
     closefile(fo)
 
+##Function to get the timezone of the appliance
+def timezone(logfile):
+	global timezone
+	fobj = openfile(logfile)
+	
+	timezone = fobj.readlines()
+	
+	if len(timezone)>0:
+		timezone = timezone[0]
+	else:
+		timezone = ('Unable to pull this detail for this release...')	
+	
+	fobj.close()
+	
+	return timezone
+
 #Function to get the version of the code
 def codeversion(logfile):
     global version
@@ -643,6 +673,8 @@ def codeversion(logfile):
     for i in fobj:
         if i.find('version:')!=-1:
             version = i.strip()
+    
+    closefile(fobj)
             
     return version
 
@@ -655,6 +687,8 @@ def layout(logfile):
         if i.find('layout:')!=-1:
             layout = i.strip()
 
+    closefile(fobj)
+    
     return layout
 
 ##Function to get details from yaml version files
@@ -691,7 +725,8 @@ def featurestatus(logfile):
     for i in fobj:
         if(i.find('True')!=-1 or i.find('licensed')!=-1):
             fwrite.write(i)
-
+    
+    fwrite.write('\n')
     fwrite.close()
     closefile(fobj)
 
@@ -805,6 +840,10 @@ def configdetails(logfile):
                                             else:
                                                 if(logfile.find('boot.log')!=-1):
                                                     lastreb(logfile)
+						else:
+						    if(logfile.find('timezone.txt')!=-1):
+							timezone(logfile)
+
 ##Function to move files to location where the bundle is present
 ####def movefiles(path):
 ####    cwd = os.getcwd()
