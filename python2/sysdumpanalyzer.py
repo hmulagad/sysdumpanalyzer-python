@@ -1,5 +1,5 @@
 ####################################################################################################################
-####################################################################################################################
+##
 ## 03/22/17 - Added core file count and core file names to be written in systemdetails.txt
 ## 03/22/17 - Added SEVERE in the list of search string
 ## 03/22/17 - Added latest backtrace file info in errorsandwarns.txt
@@ -56,6 +56,7 @@
 ## 10/30/17 - Added logic to look for symptoms on BUG 291485
 ## 11/02/17 - Added logic to get the timezone of the apppliance from timezone.txt. The file is new from Harrier release
 ## 11/03/17 - Added logic to extract and work in proper workdir. Harrier release changed the name of extracted folder.
+## 11/07/17 - Added logic to extract the data area quotas and used space from global.yaml file in npm_data_manager.
 ####################################################################################################################
 
 ####################################################################################################################
@@ -273,7 +274,7 @@ def navigatefolders(workdir):
 
 
     for logfile in yamlfiles:
-        if(logfile.find('versions')!=-1 or logfile.find('npm_data_manager')!=-1):
+        if(logfile.find('versions')!=-1 or logfile.find('npm_data_manager')!=-1 or logfile.find('global.yaml')!=-1):
             yamls(logfile)
     
     for logfile in configfiles:
@@ -571,7 +572,19 @@ def df(logfile):
 
     for i in fobj:
         if(i.find('Filesystem')== -1):
-            fwrite.write(i)
+            fwrite.write(i)    
+    
+    fwrite.write('\n***** Data Areas Usage *****\n')
+    fwrite.write('NOT OK is displayed when Used space exceeds allocated Quota \n \n')
+    for key,value in finaldata.items():
+	if (int(value[0])-int(value[1]))<0:
+		fwrite.write('- '+key+'(NOT OK)'+'\n')
+	else:
+		fwrite.write('- '+key+'(OK)'+'\n')
+	fwrite.write('Quota(mb):'+str(value[0])+'\n')
+	fwrite.write('Used(mb):'+str(value[1])+'\n')
+	##fwrite.write(str(int(value[0])-int(value[1]))+'\n')
+
 
     fwrite.close()
     closefile(fobj)
@@ -616,7 +629,7 @@ def sysinfo(logfile):
             fwrite.write(i.strip()+'\n')
 
     fwrite.write(version+'\n')
-    fwrite.write('Timezone: '+str(timezone)+'\n')
+##    fwrite.write('Timezone: '+str(timezone)+'\n')
 
     fwrite.close()
     closefile(fobj)            
@@ -653,6 +666,8 @@ def storcli(logfile):
 def timezone(logfile):
 	global timezone
 	fobj = openfile(logfile)
+	fwrite = open(systemdetails,'a')	
+
 	
 	timezone = fobj.readlines()
 	
@@ -661,6 +676,9 @@ def timezone(logfile):
 	else:
 		timezone = ('Unable to pull this detail for this release...')	
 	
+	fwrite.write('\nTimezone: '+timezone+'\n')
+	
+	fwrite.close()
 	fobj.close()
 	
 	return timezone
@@ -691,12 +709,48 @@ def layout(logfile):
     
     return layout
 
+##Function to get the space usage for data areas
+def dataarea(logfile):
+	arr = ['']*3	
+	global finaldata
+	finaldata = {}
+
+	try:
+		fobj = openfile(logfile)
+	
+		for line in fobj:
+			if line.find('data_module_name:')!=-1:
+				arr[0] = line.split(':')[1].strip()
+			if line.find('quota_size_mb')!=-1:
+				arr[1] = line.split(':')[1].strip()
+			if line.find('used_space_mb')!=-1:
+				arr[2] = line.split(':')[1].strip()
+		
+			if (arr[0]!='' and arr[1]!='' and arr[2]!=''):
+				##print(str(arr[0])+'-'+str(arr[1])+'-'+str(arr[2]))
+				if arr[0] not in finaldata:
+					finaldata.update({arr[0]:[arr[1],arr[2]]})
+					arr = ['']*3
+##		print(finaldata)
+##		for key,value in finaldata.items():
+##			print(key)
+##			print('Quota- ',str(value[0]))
+##			print('Used- ',str(value[1]))
+	except Exception as e:
+		print('Unable to open file.... ',logfile)
+	
+	closefile(fobj)
+	
+	return finaldata
+
 ##Function to get details from yaml version files
 def yamls(logfile):
     if (logfile.find('ver-appliance.yaml')!=-1):
         codeversion(logfile)
     elif (logfile.find('layout.yaml')!=-1):
         layout(logfile)
+    elif (logfile.find('global.yaml')!=-1):
+	dataarea(logfile)
     
 ##Function to get history of dbperf module enabling/disabling - Gripen onwards
 def dbperfhis(logfile):
@@ -869,7 +923,7 @@ def main():
     global mem
     global probe
     global settingsconf
-    
+        
     print('Enter the full path to sysdump :')
     path = raw_input()
 
