@@ -57,6 +57,7 @@
 ## 11/02/17 - Added logic to get the timezone of the apppliance from timezone.txt. The file is new from Harrier release
 ## 11/03/17 - Added logic to extract and work in proper workdir. Harrier release changed the name of extracted folder.
 ## 11/07/17 - Added logic to extract the data area quotas and used space from global.yaml file in npm_data_manager.
+## 12/06/17 - Added logic to check if DPI is disabled and if we need to check for BUG 293099
 ####################################################################################################################
 
 ####################################################################################################################
@@ -134,11 +135,11 @@ def unzip(filepath):
     os.chdir(extractpath)
 
     try:
-        zfile = tarfile.open(filepath)
+    	zfile = tarfile.open(filepath)
         zfile.extractall(os.path.abspath(extractpath))
-    except PermissionError:
-        pass
-##        print('Sysdump already unzipped.')
+    except Exception as e:
+##        pass
+        print('Sysdump already unzipped.')
 
     zfile.close()
     
@@ -339,6 +340,7 @@ def bug291485(logfile,settingsconf):
 
         if len(match)>0:
             fwrite.write('\n*****BUG 291485***** \n')
+	    fwrite.write('Messages with- ' + line + ' - occurred ' + str(len(match))+ ' time(s) \n')
             fwrite.write('Indicates npm_capture may get stuck due to packet broker misconfiguration \n')
             fwrite.write('Confirm with customer if they are using timestamping. Check settings.conf \n')
             fwrite.write('Please take a look at "https://bugzilla.nbttech.com/show_bug.cgi?id=291485" \n')
@@ -381,8 +383,11 @@ def probehang(logfile):
                 fwrite.write(line + ' occured ' + str(len(match))+ ' times \n')
 
             fwrite.write('Indicates worker queues maxing out. Might cause probe hangs. \n')
-            fwrite.write('Please take look into probe.log for more details. \n')
-
+            fwrite.write('Please take look into probe.log for more details. \n \n')
+	    
+	    fwrite.write('Take a look the article to see if you are running the issue mentioned here... \n')
+	    fwrite.write('https://supportkb.riverbed.com/support/index?page=content&id=S31640 \n')
+	
         fwrite.close()
             
     except UnicodeDecodeError:
@@ -404,9 +409,9 @@ def npmcpthang(logfile):
  	    if len(match)>0:
 		fwrite.write('\n***** npm capture hang and packets dropped ***** \n')
 		if len(match)<20:
-                    fwrite.write(line + ' event occured ' + str(len(match))+ ' times (probably OK) \n')
+                    fwrite.write(line + ' event occured ' + str(len(match))+ ' time(s) (probably OK) \n')
                 else:
-                    fwrite.write(line + ' event occured ' + str(len(match))+ ' times \n')
+                    fwrite.write(line + ' event occured ' + str(len(match))+ ' time(s) \n')
                     
 		fwrite.write('Indicates that no buffering is available in npm_capture and packets might be dropped \n')
 		fwrite.write('Please check capture_slabpool table in the system metrics database to see if there are no \nfor long period of time. \n')
@@ -627,9 +632,9 @@ def sysinfo(logfile):
     for i in fobj:
         if((i.strip().find('Serial Number:')!=-1) or (i.strip().find('Product Name:')!=-1)or (i.strip().find('UUID:')!=-1)):
             fwrite.write(i.strip()+'\n')
-
+    
     fwrite.write(version+'\n')
-##    fwrite.write('Timezone: '+str(timezone)+'\n')
+    ##fwrite.write('Timezone: '+str(timezone)+'\n')
 
     fwrite.close()
     closefile(fobj)            
@@ -666,11 +671,10 @@ def storcli(logfile):
 def timezone(logfile):
 	global timezone
 	fobj = openfile(logfile)
-	fwrite = open(systemdetails,'a')	
-
+	fwrite = open(systemdetails,'a')
 	
 	timezone = fobj.readlines()
-	
+		
 	if len(timezone)>0:
 		timezone = timezone[0]
 	else:
@@ -678,9 +682,9 @@ def timezone(logfile):
 	
 	fwrite.write('\nTimezone: '+timezone+'\n')
 	
-	fwrite.close()
 	fobj.close()
-	
+	fwrite.close()
+
 	return timezone
 
 #Function to get the version of the code
@@ -828,6 +832,23 @@ def bug288879(logfile):
     fwrite.close()
     closefile(fobj)
 
+##Function to check if Deep Packet Inspection is disabled
+def dpi(logfile):
+	fobj = openfile(logfile)
+	fwrite = open(systemdetails,'a')
+
+	for x in fobj:
+		if (x.find('dpi_enabled')!=-1):
+			enb = x.split(':')[1]
+			enb = enb.replace(',', '')
+			if (enb.upper() == 'FALSE'):
+				fwrite.write('\n***** BUG 293099 ***** \n')
+				fwrite.write('DPI should not be disabled unless customer does not need this feature \n')
+				fwrite.write('The bug should list narrower change and upgrade version to fix the bug \n')
+				fwrite.write('Please check https://bugzilla.nbttech.com/show_bug.cgi?id=293099 \n \n')
+	
+	closefile(fobj)
+	fwrite.close()		
 
 ##Function to parse JSON file
 def jsonparse(logfile):
@@ -842,18 +863,22 @@ def confiles(logfile):
         bug288879(logfile)
     if(logfile.find('settings.conf')!=-1):
         settingsconf = logfile
+    if(logfile.find('probe.conf')!=-1):
+	dpi(logfile)
 
     return settingsconf
 
 ##Function to change permissions
 def changeperm(fldrnm):
 	print('Changing permissions on folder and files in...',fldrnm)
-	
-	for root,dirs,files in os.walk(fldrnm):
-		for d in dirs:
-			os.chmod(os.path.join(root,d),0o755)
-		for f in files:
-			os.chmod(os.path.join(root,f),0o755)
+	try:
+		for root,dirs,files in os.walk(fldrnm):
+			for d in dirs:
+				os.chmod(os.path.join(root,d),0o755)
+			for f in files:
+				os.chmod(os.path.join(root,f),0o755)
+	except OSError as e:
+		print('Cannot change permissions...different user unzipped the file',e)
 	return
         
 ##Function to get configuration and other system details
