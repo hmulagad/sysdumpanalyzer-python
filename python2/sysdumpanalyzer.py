@@ -58,6 +58,8 @@
 ## 11/03/17 - Added logic to extract and work in proper workdir. Harrier release changed the name of extracted folder.
 ## 11/07/17 - Added logic to extract the data area quotas and used space from global.yaml file in npm_data_manager.
 ## 12/06/17 - Added logic to check if DPI is disabled and if we need to check for BUG 293099
+## 12/16/17 - Added logic to show the Install time for the latest upgrade
+## 12/29/17 - Added logic to show weblinks for the output files for easy access
 ####################################################################################################################
 
 ####################################################################################################################
@@ -66,13 +68,11 @@
 ## 07/19/17 - Implement logic to check if the same error occurs more than once and write accoordingly. This is major change.
 ## 07/20/17 - Found storcli_calls_show.txt. Added same storcli logic but that does not work completely. Find out if this
 ##            for Gripen or specific models and add logic. Currently calling storcli logic for this file too
-## 08/09/17 - Timezone of the system. Need logic to get the timezone where the system is deployed
 ## 09/05/17 - If the sysdump name is anything besides what the appliance generated then the script would fail.
 ##            This is happening because we are constructing the working folder name based on the filename of the dump.
 ##            If the file is different from the extracted folder name then obviously script does not find the folder
 ##            and does not read any files.
-## 11/02/17 - If sysdump is already extracted then do not try to do chmod as it fails because of permissions and size of the file.
-####################################################################################################################
+###################################################################################################################
 
 import os
 import re
@@ -275,7 +275,7 @@ def navigatefolders(workdir):
 
 
     for logfile in yamlfiles:
-        if(logfile.find('versions')!=-1 or logfile.find('npm_data_manager')!=-1 or logfile.find('global.yaml')!=-1):
+        if(logfile.find('versions')!=-1 or logfile.find('npm_data_manager')!=-1 or logfile.find('global.yaml')!=-1 or logfile.find('ver-appliance_history.yaml')!=-1):
             yamls(logfile)
     
     for logfile in configfiles:
@@ -635,6 +635,7 @@ def sysinfo(logfile):
     
     fwrite.write(version+'\n')
     ##fwrite.write('Timezone: '+str(timezone)+'\n')
+    fwrite.write('Upgrade Time: '+str(updatetime)+'\n')
 
     fwrite.close()
     closefile(fobj)            
@@ -747,6 +748,19 @@ def dataarea(logfile):
 	
 	return finaldata
 
+##Function to get the latest upgrade time stamp
+def upgrdtme(logfile):
+	global updatetime
+	fobj = openfile(logfile)
+	lines = fobj.readlines()
+
+	tmp = lines[-5:]
+
+	for n in tmp:
+		if n.find('install_time_str:')!=-1:
+			updatetime = n.replace('install_time_str:','')
+	return updatetime
+
 ##Function to get details from yaml version files
 def yamls(logfile):
     if (logfile.find('ver-appliance.yaml')!=-1):
@@ -755,6 +769,8 @@ def yamls(logfile):
         layout(logfile)
     elif (logfile.find('global.yaml')!=-1):
 	dataarea(logfile)
+    elif(logfile.find('ver-appliance_history.yaml')!=-1):
+	upgrdtme(logfile)
     
 ##Function to get history of dbperf module enabling/disabling - Gripen onwards
 def dbperfhis(logfile):
@@ -880,7 +896,29 @@ def changeperm(fldrnm):
 	except OSError as e:
 		print('Cannot change permissions...different user unzipped the file',e)
 	return
-        
+
+##Function to generate weblinks for output files
+def weblinks(path,filename,systemdetails):	
+	baseURL = 'http://support.nbttech.com/'
+	sysURL = ''
+	errURL = ''
+
+	tmpPath = str(os.path.dirname(path))[str(os.path.dirname(path)).index('data/'):]
+	
+	sysURL = baseURL+tmpPath+'/'+systemdetails
+	errURL = baseURL+tmpPath+'/'+filename
+	logURL = baseURL+tmpPath	
+
+	print('Creating Web Link to files...\n')
+	print('***********************************\n')
+	print('           WEB LINKS               \n')
+	
+	print('Browse Logs: '+logURL+'\n')
+	print('Systemdetails: '+sysURL+'\n')
+	print('Errors Log: '+errURL+'\n')
+	
+	print('\n***********************************\n')
+
 ##Function to get configuration and other system details
 def configdetails(logfile):
     
@@ -969,7 +1007,7 @@ def main():
     workdir = unzip(path)
     navigatefolders(workdir)
     changeperm(workdir)
-        
+    weblinks(path,filename,systemdetails)        
 ##    movefiles(path)
 ##    cleanup()
     
