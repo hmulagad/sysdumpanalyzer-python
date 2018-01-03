@@ -60,6 +60,8 @@
 ## 12/06/17 - Added logic to check if DPI is disabled and if we need to check for BUG 293099
 ## 12/16/17 - Added logic to show the Install time for the latest upgrade
 ## 12/29/17 - Added logic to show weblinks for the output files for easy access
+## 01/02/18 - Added logic to catch BUG 289823 - rollup_stats.json
+## 01/03/18 - Added logic to catch BUG 294375 - Incorrect storage block settings
 ####################################################################################################################
 
 ####################################################################################################################
@@ -298,6 +300,7 @@ def navigatefolders(workdir):
 	    	print('Processing ',logfile)
 		npmcpthang(logfile)
 		bug291485(logfile,settingsconf)
+		bug294375(logfile)
 		errorsandwarns(logfile)
 
             else:
@@ -363,6 +366,32 @@ def bug291485(logfile,settingsconf):
         print('Unable to open file... ',settingsconf)
 
 
+##Function to check storage volume misconfiguration in block size
+def bug294375(logfile):
+	lines = ['Incorrect file size for storage file']
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		ctnt = fobj.readlines()
+
+		fobj.close()
+
+		for line in lines:
+			match = [s for s in ctnt if line in s]
+
+		if len(match)>0:
+			fwrite.write('\n***** BUG 294375 ***** \n')
+			fwrite.write('Messages - ' + line + ' - occurred ' + str(len(match))+ ' time(s) \n')
+			fwrite.write('Indicates Storage Unit block size misconfiguration \n')
+			fwrite.write('Check if you have npm capture core dumping \n')
+			fwrite.write('Please take a look at the bug below for more details and symptoms \n')
+			fwrite.write('https://bugzilla.nbttech.com/show_bug.cgi?id=294375 \n')
+
+	except Exception as e:
+		print('Unable to open logfile... ',logfile)
+	
+	return
+
 #Function to check if there is a possible hang in the probe process
 def probehang(logfile):
     line = 'Rollups processor: exported 0  basic connections - 0  tcp connections'
@@ -414,7 +443,7 @@ def npmcpthang(logfile):
                     fwrite.write(line + ' event occured ' + str(len(match))+ ' time(s) \n')
                     
 		fwrite.write('Indicates that no buffering is available in npm_capture and packets might be dropped \n')
-		fwrite.write('Please check capture_slabpool table in the system metrics database to see if there are no \nfor long period of time. \n')
+		fwrite.write('Please check capture_slabpool table in the system metrics database to see if there are no gaps \nfor long period of time. \n')
 	   
 	    fwrite.close()
 
@@ -834,6 +863,36 @@ def hostgroups(logfile):
         fwrite.close()
         closefile(fobj)
 
+##Function to check if filters are blocked
+def filterblocks(logfile):
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		line = fobj.readlines()
+	
+
+		tmp = line[-1:]
+		ctr = str(tmp[0]).replace('"','',)
+		ctr = ctr[ctr.index('shm_error:'):]
+		ctr = ctr.split(':')
+		ctr = int(str(ctr[1]).replace('}',''))
+##	print(ctr)
+		if ctr>0:
+			fwrite.write('\n***** BUG 289823 ***** \n')
+			fwrite.write('shm_error counter in rollups_stats.json file is greater than 0 for last minute of the bundle.')
+			fwrite.write('\nPlease take a look at below bug for all symptoms and check if your case matches them.')
+			fwrite.write('\n"https://bugzilla.nbttech.com/show_bug.cgi?id=289823" \n')
+			fwrite.write('\nSnippet from json file: \n')
+			fwrite.write(tmp[0]+'\n')	
+	
+	except Exception as e:
+		print('Unable to open file....',logfile)
+	
+	closefile(fobj)
+	fwrite.close()
+
+	return
+
 ##Function to check existence of slab settings file
 def bug288879(logfile):
     fobj  = openfile(logfile)
@@ -870,6 +929,8 @@ def dpi(logfile):
 def jsonparse(logfile):
     if(logfile.find('hostgroup-settings.json')!=-1):
         hostgroups(logfile)
+    if(logfile.find('rollups_stats.json')!=-1):
+	filterblocks(logfile)
 
 ##Function to go through all .conf files
 def confiles(logfile):
