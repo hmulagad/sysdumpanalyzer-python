@@ -62,6 +62,9 @@
 ## 12/29/17 - Added logic to show weblinks for the output files for easy access
 ## 01/02/18 - Added logic to catch BUG 289823 - rollup_stats.json
 ## 01/03/18 - Added logic to catch BUG 294375 - Incorrect storage block settings
+## 01/04/18 - Added logic to get the execution time of the script.
+## 01/16/18 - Added logic to get ERRORS and WARNINGS from yarder log
+## 01/21/18 - Added logic to get the DB Types monitored
 ####################################################################################################################
 
 ####################################################################################################################
@@ -84,6 +87,8 @@ import shutil
 import stat
 import time
 import io
+
+start = time.time()
 
 def del_rw(action, name, exc):
     os.chmod(name, stat.S_IWRITE)
@@ -246,6 +251,7 @@ def navigatefolders(workdir):
     sqlfiles = []
     jsonfiles = []
     conffiles = []
+    gnrlfiles = []
     folderstoread = ['coredumps']
     
     
@@ -274,6 +280,9 @@ def navigatefolders(workdir):
                                     else:
                                         if(x.endswith('.conf')):
                                             conffiles.append(os.path.join(os.path.abspath(path),x))
+					else:
+					    if(x.find('yarder')!=-1 or x.find('npm_cli')!=-1):
+						gnrlfiles.append(os.path.join(os.path.abspath(path),x))
 
 
     for logfile in yamlfiles:
@@ -302,10 +311,18 @@ def navigatefolders(workdir):
 		bug291485(logfile,settingsconf)
 		bug294375(logfile)
 		errorsandwarns(logfile)
+	    else:
+		if logfile.find('sqldecode')!=-1:
+			print('Processing ',logfile)
+			dbtypes(logfile)
+			errorsandwarns(logfile)
+		else:
+			print('Processing ',logfile)
+			errorsandwarns(logfile)
 
-            else:
-           	 print('Processing ',logfile)
-		 errorsandwarns(logfile)
+    for logfile in gnrlfiles:
+	print('Processing ',logfile)
+	errorsandwarns(logfile)
 
 ##Get list of all core files
     for logfile in configfiles:
@@ -325,6 +342,40 @@ def navigatefolders(workdir):
 ##            probedata(conn,c)
 ##            
 ##            dbclose(conn)
+
+##Function get DB Types from sqldecode.log
+def dbtypes(logfile):
+	dblist = []
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		fwrite.write('\n***** Databases Monitored*****\n')
+
+		for line in fobj:
+			if (line.find('DBA-SQL-I-0 New database')!=-1 and line.find('(monitored)')!=-1):
+				##tmp = (line[line.index('database'):])
+				match = re.findall(r'\[[\ a-zA-Z]*\]',line)          ##matches all DB types excpet DB2 - \[[a-zA-Z][\d2 a-zA-Z]*\]
+				ip = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}',line)
+				##print(match+ip)
+				##dblist.append(re.findall(r'[\d.-]+',tmp))
+				if match not in dblist:
+					dblist.append(match)
+
+##		print(dblist)
+		for db in dblist:
+			if len(db)>0:
+				fwrite.write(str(db[0])+'\n')
+			else:
+				fwrite.write('[DB2 DRDA]'+'\n')
+
+		fobj.close()
+		fwrite.close()
+		
+	except Exception as e:
+		print('Unable to open file... ',logfile)
+		print(e)
+	
+	return dblist
 
 ##Function to check packet broker misconfiguration
 def bug291485(logfile,settingsconf):
@@ -1071,5 +1122,6 @@ def main():
     weblinks(path,filename,systemdetails)        
 ##    movefiles(path)
 ##    cleanup()
-    
+    end = time.time()
+    print('Took '+str(end-start)+'s'+' for the script to finish.... ')        
 main()
