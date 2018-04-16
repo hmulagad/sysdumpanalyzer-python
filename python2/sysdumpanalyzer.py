@@ -1,5 +1,8 @@
 ####################################################################################################################
 ##
+## AUTHOR: Harikishan Mulagada
+## ROLE  : Staff Engineering SteelCentral
+##
 ## 03/22/17 - Added core file count and core file names to be written in systemdetails.txt
 ## 03/22/17 - Added SEVERE in the list of search string
 ## 03/22/17 - Added latest backtrace file info in errorsandwarns.txt
@@ -65,6 +68,16 @@
 ## 01/04/18 - Added logic to get the execution time of the script.
 ## 01/16/18 - Added logic to get ERRORS and WARNINGS from yarder log
 ## 01/21/18 - Added logic to get the DB Types monitored
+## 01/25/18 - Keep a list of all .gz and .logz files in a list to see what you can do with them later
+## 02/01/18 - Added logic to check at_api mem usage violations as mentioned in BUG#290431
+## 02/05/18 - Added logic to catch Call Traces in /var/log/messages (Not the full traces, just the instance when it happened)
+##	      Added logic to exclude files to be parsed by errorsandwarns. Use skipfiles list to exclude/include files
+## 02/09/18 - Added logic to readh npm_alerts.db file for alert information but python sqlite3 version is not matching
+##	      sqlite3 version with which AR11 is creating the DB.
+##
+## 02/15/18 - Added logic to catch TDS ASA data being dropped. These messages exists only from INVADER and above.
+## 02/20/18 - Added logic to check if NIC is in wrong slot. Check tcstats.txt to see if we have mon0_0
+## 03/07/18 - Added logic to get the number of defined applications and also enabled applications
 ####################################################################################################################
 
 ####################################################################################################################
@@ -77,6 +90,8 @@
 ##            This is happening because we are constructing the working folder name based on the filename of the dump.
 ##            If the file is different from the extracted folder name then obviously script does not find the folder
 ##            and does not read any files.
+## 02/15/18 - Need to test logic added on 02/15/18 and 02/01/18 with sysdumps from INVADER or above. For now just verified if the script runs without issues
+##	      even after adding the logic to catch the errors for above 2 changes.
 ###################################################################################################################
 
 import os
@@ -87,6 +102,7 @@ import shutil
 import stat
 import time
 import io
+import json
 
 start = time.time()
 
@@ -176,10 +192,9 @@ def dbconnect(logfile):
 
     if (os.path.exists(logfile)):
 
-        print('Connection to db succeeded...')
         conn = sqlite3.connect(logfile)
         c = conn.cursor()
-        
+     
     else:
 
         print('Database File does not exists..\n')
@@ -192,6 +207,26 @@ def dbconnect(logfile):
 def dbclose(conn):
     conn.close()
 
+##Funcction to get alert details
+def alerts(conn,c):
+	try:
+##		c.execute("SELECT policy_name,count(id) FROM Summary GROUP BY policy_name")
+		c.execute('SELECT policy_name,count(id) FROM Summary GROUP BY policy_name UNION SELECT ''Total alerts'',count(id) FROM Summary')
+		alertlst  = c.fetchall()
+
+		fwrite.write(systemdetails,'a')
+		fwrite.write('***** System Alerts Details *****\n')
+	
+		for x in alertlst:
+			fwrite.write(str(list[x]).strip('()')+'\n')
+
+		fwrite.close()
+
+	except Exception as e:
+		print('Unable to connect to db... ')
+		print(e)
+
+	return
 ####Function to get cpu data sorted by time
 ##def cpudata(conn,c):
 ##
@@ -252,7 +287,33 @@ def navigatefolders(workdir):
     jsonfiles = []
     conffiles = []
     gnrlfiles = []
+    gzfiles = []
     folderstoread = ['coredumps']
+    skipfiles = [
+		'copy_log_type.sh.out',
+		'ledctl.log',
+		'ledmon.log'
+		'dbperf_unproc_log.sh.out',
+		'storage_monitoring_sysdump.py.out',
+		'npm_fiberblaze_sysdump.sh.out',
+		'wta_config_sysdump.py.out',
+		'policy_manager_copy_policies.sh.out',
+		'rsl_core_rest_svc_sysdump.py.out',
+		'usernotify_sysdump.py.out',
+		'lumberjack_sl6_alloy_sysdump.py.out',
+		'alert_manager_copy_alerts.sh.out',
+		'npm_capture_sysdump.py.out',
+		'npm_napatech_sysdump.sh.out',
+		'npm_webui_sysdump.sh.out',
+		'probe_sysdump.py.out',
+		'db_collection_state_info.py.out',
+		'lumberjack_sl6_platform_sysdump.py.out',
+		'probe_collection_info.log',
+		'rsl_core_rest_svcs_collection_info.log',
+		'file_permissions.txt',
+		'rpm_versions.txt',
+		'imgctrl.log'
+		]
     
     
     for fdname in os.listdir(cwd):
@@ -272,7 +333,7 @@ def navigatefolders(workdir):
                             if (x.endswith('.yaml')):
                                 yamlfiles.append(os.path.join(os.path.abspath(path),x))
                             else:
-                                if(x.endswith('.sqlite')):
+                                if(x.endswith('.sqlite') or x.endswith('.db')):
                                     sqlfiles.append(os.path.join(os.path.abspath(path),x))
                                 else:
                                     if(x.endswith('.json')):
@@ -281,8 +342,11 @@ def navigatefolders(workdir):
                                         if(x.endswith('.conf')):
                                             conffiles.append(os.path.join(os.path.abspath(path),x))
 					else:
-					    if(x.find('yarder')!=-1 or x.find('npm_cli')!=-1):
+					    if((x.find('yarder')!=-1 or x.find('npm_cli')!=-1 or x.find('messages')!=-1)and x.find('.gz')==-1):
 						gnrlfiles.append(os.path.join(os.path.abspath(path),x))
+					    else:
+					    	if (x.find('.gz')!=-1 or x.find('.logz')!=-1):
+							gzfiles.append(os.path.join(os.path.abspath(path),x))
 
 
     for logfile in yamlfiles:
@@ -317,18 +381,46 @@ def navigatefolders(workdir):
 			dbtypes(logfile)
 			errorsandwarns(logfile)
 		else:
+	            if logfile.find('atserv_api')!=-1:
 			print('Processing ',logfile)
+			at_api_memusage(logfile)
 			errorsandwarns(logfile)
+		    else:
+			if logfile.find('fsrvcltraf.log')!=-1:
+				print('Processing ',logfile)
+				tdsasadrops(logfile)
+				errorsandwarns(logfile)
+			else:
+			    if os.path.basename(logfile) in skipfiles:
+			    	print('Skipping file... ',logfile)
+			    else:
+			    	print('Processing ',logfile)
+				errorsandwarns(logfile)
 
     for logfile in gnrlfiles:
-	print('Processing ',logfile)
-	errorsandwarns(logfile)
-
+	if logfile.find('messages')!=-1:
+		call_traces(logfile)
+		errorsandwarns(logfile)
+	else:
+		print('Processing ',logfile)
+		errorsandwarns(logfile)
 ##Get list of all core files
     for logfile in configfiles:
         for foldername in folderstoread:
             if foldername in logfile:
                 corefiles.append(logfile)
+
+
+    for logfile in sqlfiles:
+	if logfile.find('npm_alerts.db')!=-1:
+    		print(logfile)
+		conn, c = dbconnect(logfile)
+		
+		if ((conn != ' ') and (c !=' ')):
+			alerts(conn,c)
+
+		dbclose(conn)
+		
 
     coredetails(corefiles)
 
@@ -342,6 +434,84 @@ def navigatefolders(workdir):
 ##            probedata(conn,c)
 ##            
 ##            dbclose(conn)
+
+##Function to catch TDS ASA drops
+def tdsasadrops(logfile):
+	srchstrngs = ['start dropping tds data','# of tds queuer drops =']
+	cnt = []
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for strng in srchstrngs:
+			for line in fobj:
+				if strng in line:
+					cnt.append(line)
+			if len(cnt)>0:
+				fwrite.write('\n TDS is  droping data \n')
+				fwrite.write('Message - '+strng+' Occurred '+str(len(cnt))+' Times \n')
+			cnt=[]
+
+	except Exception as e:
+		print('Unable to open file... ',logfile)
+		print(e)
+	
+	fobj.close()
+	fwrite.close()
+
+	return
+
+##Function to catch Call Traces in messages
+def call_traces(logfile):
+	srchstr = ('Call Trace:')
+	trclst = []
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(filename,'a')
+		
+		for line in fobj:
+			if srchstr in line:
+				trclst.append(line)		
+		
+		if len(trclst)>0:
+			fwrite.write('\n'+'******Call Traces in file '+ str(logfile)+'******' + '\n\n')
+			for x in trclst:
+				fwrite.write(x)
+
+	except Exception as e:
+		print('Unable to open file... ',logfile)
+		print(e)
+	
+	fobj.close()
+	fwrite.close()
+
+	return trclst
+
+##Function to check memory usage violations for at_api (Bug#290431)
+def at_api_memusage(logfile):
+	srchstr = ('bytes allocated for this API request exceeds max allowable value')
+	cnt = 0
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		
+		for line in fobj:
+			if line in srchstr:
+				cnt=cnt+1
+		if cnt>0:
+			fwrite.write('\n*****ATserv Memory Usage Violations ******\n')
+			fwrite.write('atserv api memory usage exceeded 512MB quota - '+ cnt+ ' times \n')
+			fwrite.write('For more details please take a look at the below bug \n')
+			fwrite.write('https://bugzilla.nbttech.com/show_bug.cgi?id=290431 \n')
+
+	except Exception as e:
+		print('Unable to open file... ',logfile)
+		print(e)
+	
+	fobj.close()
+	fwrite.close()
+
+	return cnt		
 
 ##Function get DB Types from sqldecode.log
 def dbtypes(logfile):
@@ -660,7 +830,8 @@ def df(logfile):
             fwrite.write(i)    
     
     fwrite.write('\n***** Data Areas Usage *****\n')
-    fwrite.write('NOT OK is displayed when Used space exceeds allocated Quota \n \n')
+    fwrite.write('NOT OK is displayed when Used space exceeds allocated Quota\n')
+    fwrite.write('(If the violation is less than 100MB it can probably be ignored)\n\n')
     for key,value in finaldata.items():
 	if (int(value[0])-int(value[1]))<0:
 		fwrite.write('- '+key+'(NOT OK)'+'\n')
@@ -768,31 +939,60 @@ def timezone(logfile):
 
 	return timezone
 
+##Function to check if NIC is in the wrongslot
+def tcstats(logfile):
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		
+		NIC  = fobj.readlines()
+
+		if 'mon0_0' in NIC:
+			fwrite.write('\n***** NIC in wrong location *****\n')
+			fwrite.write('A NIC in the wrong slot(mon0_0). No card should occupy mon0_0.\n')
+			fwrite.write('Check tcstats file for more details... \n')
+		
+		fobj.close()
+		fwrite.close()
+
+	except Exception as e:
+		print(e)
+
+	return	
 #Function to get the version of the code
 def codeversion(logfile):
-    global version
-    fobj = openfile(logfile)
+	try:
+
+    		global version
+    		fobj = openfile(logfile)
     
-    for i in fobj:
-        if i.find('version:')!=-1:
-            version = i.strip()
+    		for i in fobj:
+        		if i.find('version:')!=-1:
+            			version = i.strip()
     
-    closefile(fobj)
-            
-    return version
+    		closefile(fobj)
+
+	except Exception as e:
+		print(e)
+
+	return version
 
 #Function to get the Storage layout
 def layout(logfile):
-    global layout
-    fobj = openfile(logfile)
+	try:
+		global layout
+		fobj = openfile(logfile)
 
-    for i in fobj:
-        if i.find('layout:')!=-1:
-            layout = i.strip()
+		for i in fobj:
+			if i.find('layout:')!=-1:
+            			layout = i.strip()
 
-    closefile(fobj)
+    		closefile(fobj)
+
+	except Exception as e:
+		print(e)
     
-    return layout
+	return layout
 
 ##Function to get the space usage for data areas
 def dataarea(logfile):
@@ -914,6 +1114,30 @@ def hostgroups(logfile):
         fwrite.close()
         closefile(fobj)
 
+##Function to get the count of defined apps
+def definedapps(logfile):
+	try:
+		config = json.load(open(logfile))
+		num_enabled_apps = 0
+
+		fwrite = open(systemdetails,'a')
+
+		for apprule in config["items"]:
+			if apprule["enabled"] is True:
+				num_enabled_apps+= 1
+
+		fwrite.write('\n**** Total number of defined apps *****\n')
+		fwrite.write(str(len(config["items"]))+'\n')
+
+		fwrite.write('\n***** Total number of enabled apps ***** \n')
+		fwrite.write(str(num_enabled_apps)+'\n')
+
+		fwrite.close()
+		return
+	except Exception as e:
+		print('Exception reading file... ',logfile)
+		print(e)
+
 ##Function to check if filters are blocked
 def filterblocks(logfile):
 	try:
@@ -982,6 +1206,9 @@ def jsonparse(logfile):
         hostgroups(logfile)
     if(logfile.find('rollups_stats.json')!=-1):
 	filterblocks(logfile)
+    if(logfile.find('app_rule-settings.json')!=-1):
+	definedapps(logfile)
+
 
 ##Function to go through all .conf files
 def confiles(logfile):
@@ -1072,7 +1299,9 @@ def configdetails(logfile):
 						else:
 						    if(logfile.find('timezone.txt')!=-1):
 							timezone(logfile)
-
+						    else:
+							if(logfile.find('tcstats.txt')!=-1):
+								tcstats(logfile)
 ##Function to move files to location where the bundle is present
 ####def movefiles(path):
 ####    cwd = os.getcwd()
