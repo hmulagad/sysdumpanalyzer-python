@@ -1,3 +1,5 @@
+##!/opt/support/bin/python3
+
 ####################################################################################################################
 ##
 ## AUTHOR: Harikishan Mulagada
@@ -78,6 +80,11 @@
 ## 02/15/18 - Added logic to catch TDS ASA data being dropped. These messages exists only from INVADER and above.
 ## 02/20/18 - Added logic to check if NIC is in wrong slot. Check tcstats.txt to see if we have mon0_0
 ## 03/07/18 - Added logic to get the number of defined applications and also enabled applications
+## 04/12/18 - Added more files to skipfiles list to stop processing them
+##	      Added logic to catch exception when files are missing - codeversion and layout
+## 04/13/18 - Added logic to get hardware and software drops from metric.sqlite DB
+## 04/16/18 - Added logic to get the status of the secure vault. This feature is available only for 11.4 and above.
+## 05/11/18 - Added logic to get the out-of-sync clock messages in /var/log/messages
 ####################################################################################################################
 
 ####################################################################################################################
@@ -93,6 +100,7 @@
 ## 02/15/18 - Need to test logic added on 02/15/18 and 02/01/18 with sysdumps from INVADER or above. For now just verified if the script runs without issues
 ##	      even after adding the logic to catch the errors for above 2 changes.
 ###################################################################################################################
+
 
 import os
 import re
@@ -218,7 +226,7 @@ def alerts(conn,c):
 		fwrite.write('***** System Alerts Details *****\n')
 	
 		for x in alertlst:
-			fwrite.write(str(list[x]).strip('()')+'\n')
+			fwrite.write(str(alertlst[x]).strip('()')+'\n')
 
 		fwrite.close()
 
@@ -227,6 +235,20 @@ def alerts(conn,c):
 		print(e)
 
 	return
+
+##Function to get software/hardware drops
+def sw_hw_drops(conn,c):
+	try:
+		c.execute("SELECT datetime(timestamp,'unixepoch','localtime') as datetime, interface,sum(hw_dropped_packets) hw_drops,sum(sw_dropped_packets) sw_drops FROM capture_interface where (hw_dropped_packets!=0 or sw_dropped_packets) group by interface,timestamp order by datetime")
+		drplst = c.fetchall()
+
+		for x in drplst:
+			print(str(drplst[x]).strip('()')+'\n')
+
+	except Exception as e:
+		print(e)
+
+
 ####Function to get cpu data sorted by time
 ##def cpudata(conn,c):
 ##
@@ -292,7 +314,7 @@ def navigatefolders(workdir):
     skipfiles = [
 		'copy_log_type.sh.out',
 		'ledctl.log',
-		'ledmon.log'
+		'ledmon.log',
 		'dbperf_unproc_log.sh.out',
 		'storage_monitoring_sysdump.py.out',
 		'npm_fiberblaze_sysdump.sh.out',
@@ -312,7 +334,10 @@ def navigatefolders(workdir):
 		'rsl_core_rest_svcs_collection_info.log',
 		'file_permissions.txt',
 		'rpm_versions.txt',
-		'imgctrl.log'
+		'imgctrl.log',
+		'secure_vault_sysdump.py.out',
+		'system_metrics_sysdump.py.out',
+		'yum.log'
 		]
     
     
@@ -399,6 +424,7 @@ def navigatefolders(workdir):
 
     for logfile in gnrlfiles:
 	if logfile.find('messages')!=-1:
+		outofsync(logfile)
 		call_traces(logfile)
 		errorsandwarns(logfile)
 	else:
@@ -421,6 +447,15 @@ def navigatefolders(workdir):
 
 		dbclose(conn)
 		
+	else:
+		if logfile.find('metrics.sqlite')!=-1:
+			print(logfile)
+			conn, c = dbconnect(logfile)
+
+		if ((conn != ' ') and (c !=' ')):
+			sw_hw_drops(conn,c)
+
+		dbclose(conn)
 
     coredetails(corefiles)
 
@@ -482,6 +517,31 @@ def call_traces(logfile):
 		print('Unable to open file... ',logfile)
 		print(e)
 	
+	fobj.close()
+	fwrite.close()
+
+	return trclst
+
+##Function to catch clock out of sync messages
+def outofsync(logfile):
+	srchstr = ('timestamp clock got Out-of-Sync with reference')
+	trclst = []
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if srchstr in line:
+				trclst.append(line)
+
+		if len(trclst)>0:
+			fwrite.write('\n*****Clock out of sync *****\n')
+			fwrite.write('Timestamp clock got Out-of-Sync occurred: '+str(len(trclst))+' times \n')
+			fwrite.write('Please look into /var/log/messages file to see clock is out of sync \n')
+
+	except Exception as e:
+		print(e)
+
 	fobj.close()
 	fwrite.close()
 
@@ -958,7 +1018,32 @@ def tcstats(logfile):
 	except Exception as e:
 		print(e)
 
-	return	
+	return
+
+##Function to check the status of the secure vault
+def secure_vault_status(logfile):
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		status = fobj.readlines()
+		
+		fwrite.write('\n***** Secure Vault Status *****\n')
+		if str(status).find('active')!=-1:
+			fwrite.write('Secure Vault is active \n')
+		elif str(status).find('locked')!=-1:
+			fwrite.write('Secure Vault is locked \n')
+			fwrite.write('Indicates MAC was changed, or other errors \n')
+			fwrite.write('Check boot/messages logs for errors \n')
+
+		fobj.close()
+		fwrite.close()
+
+	except Exception as e:
+		print(e)
+
+
+	
 #Function to get the version of the code
 def codeversion(logfile):
 	try:
@@ -1302,6 +1387,9 @@ def configdetails(logfile):
 						    else:
 							if(logfile.find('tcstats.txt')!=-1):
 								tcstats(logfile)
+							else:
+							    if(logfile.find('secure_vault_rest_state.txt')!=-1):
+								secure_vault_status(logfile)
 ##Function to move files to location where the bundle is present
 ####def movefiles(path):
 ####    cwd = os.getcwd()
