@@ -85,6 +85,9 @@
 ## 04/13/18 - Added logic to get hardware and software drops from metric.sqlite DB
 ## 04/16/18 - Added logic to get the status of the secure vault. This feature is available only for 11.4 and above.
 ## 05/11/18 - Added logic to get the out-of-sync clock messages in /var/log/messages
+## 06/04/18 - BUG where script is failing when missing global.yaml and hence dict is missing. Handle this with try/catch block.
+## 07/19/18 - Added logic to catch stitcher drops to aggregrates for errors 5202,5203 and 5204 errors.
+##	      Added logic to catch if we have issues writing to IP conversation table in the database based on load times	      
 ####################################################################################################################
 
 ####################################################################################################################
@@ -367,7 +370,7 @@ def navigatefolders(workdir):
                                         if(x.endswith('.conf')):
                                             conffiles.append(os.path.join(os.path.abspath(path),x))
 					else:
-					    if((x.find('yarder')!=-1 or x.find('npm_cli')!=-1 or x.find('messages')!=-1)and x.find('.gz')==-1):
+					    if((x.find('yarder')!=-1 or x.find('npm_cli')!=-1 or x.find('messages')!=-1 or x.find('storage_services')!=-1)and x.find('.gz')==-1):
 						gnrlfiles.append(os.path.join(os.path.abspath(path),x))
 					    else:
 					    	if (x.find('.gz')!=-1 or x.find('.logz')!=-1):
@@ -416,11 +419,17 @@ def navigatefolders(workdir):
 				tdsasadrops(logfile)
 				errorsandwarns(logfile)
 			else:
-			    if os.path.basename(logfile) in skipfiles:
-			    	print('Skipping file... ',logfile)
-			    else:
-			    	print('Processing ',logfile)
+			    if (logfile.find('error.log')!=-1 and logfile.find('stitcher')!=-1):
+				print('Processing ',logfile)
+				stitcherdrops(logfile)
 				errorsandwarns(logfile)
+			    else:
+			        if os.path.basename(logfile) in skipfiles:
+			    		print('Skipping file... ',logfile)
+			        else:
+			    		print('Processing ',logfile)
+					errorsandwarns(logfile)
+				
 
     for logfile in gnrlfiles:
 	if logfile.find('messages')!=-1:
@@ -470,6 +479,34 @@ def navigatefolders(workdir):
 ##            
 ##            dbclose(conn)
 
+##Function to catch Stitcher drops to aggregrate
+def stitcherdrops(logfile):
+	srchstrngs = ['#5204','#5203','#5202']
+	cnt = []
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		
+		for line in fobj:
+			for string in srchstrngs:
+				if (string in line and line.find('ERROR')!=-1):
+					cnt.append(line)
+
+		if len(cnt)>0:
+			fwrite.write('\n*****Stitcher:Dropping pages to aggregrates ***** \n')
+			fwrite.write('Message with error Aggregates: cant get SMQ element occurred - '+str(sum('#5204' in s for s in cnt))+' times \n')
+			fwrite.write('Message with error Aggregates: cant allocate output block - '+str(sum('#5202' in s for s in cnt))+' times \n')
+			fwrite.write('For more details on the errors please take a look at /data/log/stitcher/error.log \n')
+			
+	except Exception as e:
+		print('Unable to open file... ',logfile)
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+	return
+
 ##Function to catch TDS ASA drops
 def tdsasadrops(logfile):
 	srchstrngs = ['start dropping tds data','# of tds queuer drops =']
@@ -483,8 +520,9 @@ def tdsasadrops(logfile):
 				if strng in line:
 					cnt.append(line)
 			if len(cnt)>0:
-				fwrite.write('\n TDS is  droping data \n')
+				fwrite.write('\n***** TDS ASA data being dropped*****\n')
 				fwrite.write('Message - '+strng+' Occurred '+str(len(cnt))+' Times \n')
+				fwrite.write('Look in fsrvcltraf.log for more details. \n')
 			cnt=[]
 
 	except Exception as e:
@@ -888,19 +926,23 @@ def df(logfile):
     for i in fobj:
         if(i.find('Filesystem')== -1):
             fwrite.write(i)    
-    
-    fwrite.write('\n***** Data Areas Usage *****\n')
-    fwrite.write('NOT OK is displayed when Used space exceeds allocated Quota\n')
-    fwrite.write('(If the violation is less than 100MB it can probably be ignored)\n\n')
-    for key,value in finaldata.items():
-	if (int(value[0])-int(value[1]))<0:
-		fwrite.write('- '+key+'(NOT OK)'+'\n')
-	else:
-		fwrite.write('- '+key+'(OK)'+'\n')
-	fwrite.write('Quota(mb):'+str(value[0])+'\n')
-	fwrite.write('Used(mb):'+str(value[1])+'\n')
+  
+    try:
+    	if len(finaldata.keys())!=0:
+    		fwrite.write('\n***** Data Areas Usage *****\n')
+    		fwrite.write('NOT OK is displayed when Used space exceeds allocated Quota\n')
+    		fwrite.write('(If the violation is less than 100MB it can probably be ignored)\n\n')
+    		for key,value in finaldata.items():
+			if (int(value[0])-int(value[1]))<0:
+				fwrite.write('- '+key+'(NOT OK)'+'\n')
+			else:
+				fwrite.write('- '+key+'(OK)'+'\n')
+    			fwrite.write('Quota(mb):'+str(value[0])+'\n')
+    			fwrite.write('Used(mb):'+str(value[1])+'\n')
 	##fwrite.write(str(int(value[0])-int(value[1]))+'\n')
-
+    
+    except Exception as e:
+	print(e)
 
     fwrite.close()
     closefile(fobj)
@@ -943,10 +985,14 @@ def sysinfo(logfile):
     for i in fobj:
         if((i.strip().find('Serial Number:')!=-1) or (i.strip().find('Product Name:')!=-1)or (i.strip().find('UUID:')!=-1)):
             fwrite.write(i.strip()+'\n')
-    
-    fwrite.write(version+'\n')
+   
+    try:
+    	if version!='': 
+    		fwrite.write(version+'\n')
     ##fwrite.write('Timezone: '+str(timezone)+'\n')
-    fwrite.write('Upgrade Time: '+str(updatetime)+'\n')
+    		fwrite.write('Upgrade Time: '+str(updatetime)+'\n')
+    except Exception as e:
+	print(e)
 
     fwrite.close()
     closefile(fobj)            
@@ -1107,6 +1153,7 @@ def dataarea(logfile):
 ##			print('Quota- ',str(value[0]))
 ##			print('Used- ',str(value[1]))
 	except Exception as e:
+		finaldata = {}
 		print('Unable to open file.... ',logfile)
 	
 	closefile(fobj)
@@ -1253,6 +1300,33 @@ def filterblocks(logfile):
 
 	return
 
+##Function to check bottlenecks in database insertions for IP conversations
+def ip2iptrafcongestion(logfile):
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		load_time = 0
+		tmp =''
+
+		for line in fobj:
+			tmp = json.loads(line)
+			if tmp["load_time_s"]>100:
+				load_time+=1
+		
+		if load_time>0:
+			fwrite.write('\n*****Issues with IP conversation data being written to database *****\n')
+			fwrite.write('Instances of data being written to database taking more than 100s occurred '+str(load_time)+' times \n')
+			fwrite.write('For more details on how many rows were being written which took more than 100s please look in to lip2iptraf.json file \n')
+			fwrite.write('If load time is 300-500s or if continuously over 100s then we might be dropping data \n')
+
+	except Exception as e:
+		print(e)
+
+	closefile(fobj)
+	fwrite.close()
+
+	return
+
 ##Function to check existence of slab settings file
 def bug288879(logfile):
     fobj  = openfile(logfile)
@@ -1293,6 +1367,8 @@ def jsonparse(logfile):
 	filterblocks(logfile)
     if(logfile.find('app_rule-settings.json')!=-1):
 	definedapps(logfile)
+    if(logfile.find('lip2iptraf.json')!=-1):
+	ip2iptrafcongestion(logfile)
 
 
 ##Function to go through all .conf files
