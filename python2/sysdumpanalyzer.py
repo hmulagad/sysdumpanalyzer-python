@@ -87,7 +87,8 @@
 ## 05/11/18 - Added logic to get the out-of-sync clock messages in /var/log/messages
 ## 06/04/18 - BUG where script is failing when missing global.yaml and hence dict is missing. Handle this with try/catch block.
 ## 07/19/18 - Added logic to catch stitcher drops to aggregrates for errors 5202,5203 and 5204 errors.
-##	      Added logic to catch if we have issues writing to IP conversation table in the database based on load times	      
+##	      Added logic to catch if we have issues writing to IP conversation table in the database based on load times
+## 09/24/18 - Changed logic for storcli function to get the health status of the Storage units
 ####################################################################################################################
 
 ####################################################################################################################
@@ -997,33 +998,135 @@ def sysinfo(logfile):
     fwrite.close()
     closefile(fobj)            
 
+#def storcli(logfile):
+#    searchstring = 'PD LIST :\n'
+#    fobj = openfile(logfile)
+#
+#    fwrite = open(systemdetails,'a')
+#    fwrite.write('\n****** Drives status *****\n')
+#
+#    fwrite.write(str(layout)+'\n')
+#    
+#    for i in fobj:
+#        if i.find('Physical Drives')!=-1:
+#            fwrite.write(i)
+#
+#    fo = openfile(logfile)
+#    lines = fo.readlines()
+#
+#    if searchstring in lines:
+#        lines = lines[lines.index(searchstring)+3:]
+#
+#        for x in lines:
+#            fwrite.write(x)
+#    else:
+#        fwrite.write('No Physical Drives \n')
+#    
+#    fwrite.close()
+#    closefile(fobj)
+#    closefile(fo)
+
+##Function to check the health of Storage Units
 def storcli(logfile):
-    searchstring = 'PD LIST :\n'
-    fobj = openfile(logfile)
+	fobj = open(logfile,'r')
+	fwrite = open(systemdetails,'a')
+	fwrite.write('\n***** Storage Units Health *****\n')
 
-    fwrite = open(systemdetails,'a')
-    fwrite.write('\n****** Drives status *****\n')
+	fwrite.write(str(layout)+'\n')
 
-    fwrite.write(str(layout)+'\n')
-    
-    for i in fobj:
-        if i.find('Physical Drives')!=-1:
-            fwrite.write(i)
+	status = ''
+	line = ''
+	section = ''
+	inuse = ''
+	quota = ''
+	pktcptr = ''
+	message = ''
 
-    fo = openfile(logfile)
-    lines = fo.readlines()
+	try:
+		for line in fobj:
+			if (line.find('primary_data')!=-1):
+				break
+			if (line.find('Data section')!=-1):
+				section = line.split('section ')[1]
+			if (line.find('Status')!=-1 and section):
+				status = line.split(':')[1]
+			if (line.find('In Use')!=-1 and section and status):
+				inuse = line.split(':')[1]
+			if (line.find('packet_capture')!=-1 and section and status and inuse):
+				pktcptr = line.split(':')[1]
+			if (line.find('Quota (MB)')!=-1 and section and status and inuse and pktcptr):
+				quota = line.split(':')[1]
+			if status and section and inuse and pktcptr and quota:
+				fwrite.write('\nSection: '+str(section))
+				fwrite.write('Status:  '+str(status))
+				fwrite.write('InUse:   '+str(inuse))
+				fwrite.write('Packet Capture: '+str(pktcptr))
+				fwrite.write('Quota:   '+str(quota)+'\n')
+			
+				message = healthchecksu(section,status,inuse,pktcptr,quota)
+				fwrite.write(message)
+	
+				section = status = inuse = quota = pktcptr = ''
+	
+		fobj.close()
+		fwrite.close()
 
-    if searchstring in lines:
-        lines = lines[lines.index(searchstring)+3:]
+	except Exception as e:
+		print(e)
 
-        for x in lines:
-            fwrite.write(x)
-    else:
-        fwrite.write('No Physical Drives \n')
-    
-    fwrite.close()
-    closefile(fobj)
-    closefile(fo)
+##Function to determine next step for faulty SU
+def healthchecksu(section,status,inuse,pktcptr,quota):
+	
+	message = ''
+	step2a = 'Status is failed,uninitialized (or foreign and it is confirmed that the SU was relocated), reinitialize it: \n\n' \
+                 +'>storage data_section <serial> reinitialize \n \n' \
+                +'Wait 3 minutes, then check that the Status of the data section is now active by re-running the show command: \n' \
+                +'>show storage data_section <serial> \n \n' \
+                +'If the status is still initializing, wait an additional 3 minutes and repeat the above check \n' \
+                +'If reinitialization takes longer than 15 minutes, work with engineering to determine the cause \n' \
+                +'If the status after reinitialization becomes unmounted, the system needs to be rebooted (this may happen if the storage volume previously failed) \n' \
+                +'After rebooting, the status should become active (work with ENG if not) \n' \
+		+'If the status after reinitialization becomes anything other active (or unmounted, handled above), work with engineering to determine the cause \n\n' \
+		+'Run: \n'
+		
+
+	step2b = '>no storage data_area packet_capture section <serial> \n\n' \
+		 +'Run: \n'
+		 
+	step3 = '>storage data_area packet_capture section <serial> \n\n' \
+		+'It may take 1-2 minutes for the system to configure itself \n' \
+		+'If there was a previous error writing capture data to a disk, a lengthy self-check may begin which may take up to an hour or more, depending on #SUs \n'
+		
+	try:
+		if (status.find('failed')!=-1 or status.find('uninitialized')!=-1):
+			##message = 'Start from Step 2a in the following article..\n'
+			##message = message+'https://supportkb.riverbed.com/support/index?page=content&id=S32593 \n'
+			message = step2a+step3
+		elif (status.find('active')!=-1):
+			if (inuse.find('yes')!=-1):
+				if (str(quota.split(':')[0]).strip() == '0'):
+					##message = 'Start from Step 2b in the following article..\n'
+					##message = message+'https://supportkb.riverbed.com/support/index?page=content&id=S32593 \n'
+					message = step2b+step3
+				elif (str(quota.split(':')[0]).strip()!= '0'):
+					message = 'Packet Capture is already present and no further action is needed \n'
+			elif (inuse.find('no')!=-1):
+				##message = 'Packet Capture data area needs to be created. Start from Step 3 in the following article..\n'
+				##message = message+'https://supportkb.riverbed.com/support/index?page=content&id=S32593 \n'
+				message ='Packet capture data area needs to be created \n'+ step3
+		elif (status.find('foreign')!=-1):
+			message = 'It was moved from another system (or disconnected from same system during full reinstallation or not yet reinitialized) \n'
+			message = message+'If this is expected, then it can be reinitialzed; \n'
+			##message = message+'https://supportkb.riverbed.com/support/index?page=content&id=S32593 \n'
+			message = message + step2a + step3
+		else:
+			message = 'Status is '+status+'\n'
+			message = message+'It needs evaluation by support/engineering \n'
+
+	except Exception as e:
+		print(e)
+
+	return message
 
 ##Function to get the timezone of the appliance
 def timezone(logfile):
@@ -1443,29 +1546,26 @@ def configdetails(logfile):
                             if (logfile.find('bios_serial_number.txt')!=-1):
                                 sysinfo(logfile)
                             else:
-                                if(logfile.find('storcli.txt')!=-1):
+                                if(logfile.find('storage_cli_output.txt')!=-1):
                                     storcli(logfile)
                                 else:
                                     if(logfile.find('feature_status.txt')!=-1):
                                         featurestatus(logfile)
                                     else:
-                                        if(logfile.find('storcli_call_show.txt')!=-1):
-                                            storcli(logfile)
+                                        if(logfile.find('manage.log')!=-1):
+                                            dbperfhis(logfile)
                                         else:
-                                            if(logfile.find('manage.log')!=-1):
-                                               dbperfhis(logfile)
-                                            else:
-                                                if(logfile.find('boot.log')!=-1):
-                                                    lastreb(logfile)
+                                            if(logfile.find('boot.log')!=-1):
+                                                lastreb(logfile)
+					    else:
+						if(logfile.find('timezone.txt')!=-1):
+                                                    timezone(logfile)
 						else:
-						    if(logfile.find('timezone.txt')!=-1):
-							timezone(logfile)
+						    if(logfile.find('tcstats.txt')!=-1):
+                                                        tcstats(logfile)
 						    else:
-							if(logfile.find('tcstats.txt')!=-1):
-								tcstats(logfile)
-							else:
-							    if(logfile.find('secure_vault_rest_state.txt')!=-1):
-								secure_vault_status(logfile)
+							if(logfile.find('secure_vault_rest_state.txt')!=-1):
+                                                            secure_vault_status(logfile)
 ##Function to move files to location where the bundle is present
 ####def movefiles(path):
 ####    cwd = os.getcwd()
