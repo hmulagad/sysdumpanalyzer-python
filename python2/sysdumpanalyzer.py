@@ -89,6 +89,8 @@
 ## 07/19/18 - Added logic to catch stitcher drops to aggregrates for errors 5202,5203 and 5204 errors.
 ##	      Added logic to catch if we have issues writing to IP conversation table in the database based on load times
 ## 09/24/18 - Changed logic for storcli function to get the health status of the Storage units
+## 10/01/18 - Added logic to catch BUG 300800
+## 10/11/18 - Changed logic in storcli function to include SUs which do not have Data Areas set and have NONE
 ####################################################################################################################
 
 ####################################################################################################################
@@ -349,7 +351,7 @@ def navigatefolders(workdir):
         if (os.path.isdir(fdname) and os.path.abspath(fdname)== workdir):
             for path,subdirs,files in os.walk(os.path.abspath(fdname)):
                 for x in files:
-                    if ((x.endswith('.txt')) or (x.find('manage.log')!=-1)):
+                    if ((x.endswith('.txt') and x.find('smartctl')==-1) or (x.find('manage.log')!=-1)):
                         configfiles.append(os.path.join(os.path.abspath(path),x))
                     else:
                         if (x.endswith('.log') or x.endswith('.out')):
@@ -425,11 +427,16 @@ def navigatefolders(workdir):
 				stitcherdrops(logfile)
 				errorsandwarns(logfile)
 			    else:
-			        if os.path.basename(logfile) in skipfiles:
-			    		print('Skipping file... ',logfile)
-			        else:
-			    		print('Processing ',logfile)
+				if (logfile.find('policy_manager.log')!=-1):
+					print('Processing ',logfile)
+					bug300800(logfile)
 					errorsandwarns(logfile)
+			    	else:
+			        	if os.path.basename(logfile) in skipfiles:
+			    			print('Skipping file... ',logfile)
+			        	else:
+			    			print('Processing ',logfile)
+						errorsandwarns(logfile)
 				
 
     for logfile in gnrlfiles:
@@ -448,25 +455,28 @@ def navigatefolders(workdir):
 
 
     for logfile in sqlfiles:
-	if logfile.find('npm_alerts.db')!=-1:
-    		print(logfile)
-		conn, c = dbconnect(logfile)
-		
-		if ((conn != ' ') and (c !=' ')):
-			alerts(conn,c)
+        try:
+            if logfile.find('npm_alerts.db')!=-1:
+                    print(logfile)
+                    conn, c = dbconnect(logfile)
+                    
+                    if ((conn != ' ') and (c !=' ')):
+                            alerts(conn,c)
 
-		dbclose(conn)
-		
-	else:
-		if logfile.find('metrics.sqlite')!=-1:
-			print(logfile)
-			conn, c = dbconnect(logfile)
+                    dbclose(conn)
+                    
+            else:
+                    if logfile.find('metrics.sqlite')!=-1:
+                            print(logfile)
+                            conn, c = dbconnect(logfile)
 
-		if ((conn != ' ') and (c !=' ')):
-			sw_hw_drops(conn,c)
+                    if ((conn != ' ') and (c !=' ')):
+                            sw_hw_drops(conn,c)
 
-		dbclose(conn)
-
+                    dbclose(conn)
+        except Exception as e:
+            print(e)
+            
     coredetails(corefiles)
 
 ##    for logfile in sqlfiles:
@@ -480,6 +490,28 @@ def navigatefolders(workdir):
 ##            
 ##            dbclose(conn)
 
+##Function to catch bug 300800
+def bug300800(logfile):
+	cnt = 0
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if (line.find('ERROR')!=-1 and line.find('Could not GET live data timestamps')!=-1):
+				cnt+=1
+		if cnt>0:
+			fwrite.write('\n*****BUG 300800 ******\n')
+			fwrite.write('read_live_data_defs_client Could not GET live data timestamps occured - '+str(cnt)+' times\n')					       
+			fwrite.write('Possibly bug 300800. Check https://bugzilla.nbttech.com/show_bug.cgi?id=300800\n')
+			fwrite.write('For more details please take a look at /data/log/policy_manager/policy_manager.log \n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+	return
 ##Function to catch Stitcher drops to aggregrate
 def stitcherdrops(logfile):
 	srchstrngs = ['#5204','#5203','#5202']
@@ -1042,34 +1074,55 @@ def storcli(logfile):
 	pktcptr = ''
 	message = ''
 
-	try:
-		for line in fobj:
-			if (line.find('primary_data')!=-1):
-				break
-			if (line.find('Data section')!=-1):
+ 	try:
+                for line in fobj:
+                        if (line.find('primary_data')!=-1):
+                                break
+                        if (line.find('Data section')!=-1):
+                        	if (section and section != line.split('section ')[1]):
+					fwrite.write('\nSection: '+str(section))
+                                	fwrite.write('Status:  '+str(status))
+                                	fwrite.write('InUse:   '+str(inuse))
+					if pktcptr == 'null':
+						fwrite.write('Packet Capture: N/A\n')
+						fwrite.write('Quota: N/A\n')
+					else:
+						fwrite.write('Packet Capture: '+str(pktcptr))
+						fwrite.write('Quota:   '+str(quota)+'\n')
+
+					message = healthchecksu(section,status,inuse,pktcptr,quota)
+					fwrite.write(message)
+
+					section = status = inuse = quota = ''
+					pktcptr = 'null'
 				section = line.split('section ')[1]
-			if (line.find('Status')!=-1 and section):
-				status = line.split(':')[1]
-			if (line.find('In Use')!=-1 and section and status):
-				inuse = line.split(':')[1]
-			if (line.find('packet_capture')!=-1 and section and status and inuse):
-				pktcptr = line.split(':')[1]
-			if (line.find('Quota (MB)')!=-1 and section and status and inuse and pktcptr):
-				quota = line.split(':')[1]
-			if status and section and inuse and pktcptr and quota:
-				fwrite.write('\nSection: '+str(section))
-				fwrite.write('Status:  '+str(status))
-				fwrite.write('InUse:   '+str(inuse))
+                        if (section and line.find('Status')!=-1):
+                                status = line.split(':')[1]
+                        if (section and status and line.find('In Use')!=-1):
+                                inuse = line.split(':')[1]
+                        if (section and status and inuse and line.find('packet_capture')!=-1):
+                                pktcptr = line.split(':')[1]
+                        if (pktcptr and line.find('Quota (MB)')!=-1):
+                                quota = line.split(':')[1]
+		# For last section.	
+		if section and status and inuse:
+			fwrite.write('\nSection: '+str(section))
+			fwrite.write('Status:  '+str(status))
+			fwrite.write('InUse:   '+str(inuse))
+			if pktcptr == 'null':
+				fwrite.write('Packet Capture: N/A\n')
+				fwrite.write('Quota: N/A\n')
+			else:
 				fwrite.write('Packet Capture: '+str(pktcptr))
 				fwrite.write('Quota:   '+str(quota)+'\n')
-			
-				message = healthchecksu(section,status,inuse,pktcptr,quota)
-				fwrite.write(message)
-	
-				section = status = inuse = quota = pktcptr = ''
-	
+
+			message = healthchecksu(section,status,inuse,pktcptr,quota)
+			fwrite.write(message)
+
+			section = status = inuse = quota = ''
+			pktcptr = 'null'
 		fobj.close()
-		fwrite.close()
+                fwrite.close()
 
 	except Exception as e:
 		print(e)
