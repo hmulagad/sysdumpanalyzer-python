@@ -91,20 +91,21 @@
 ## 09/24/18 - Changed logic for storcli function to get the health status of the Storage units
 ## 10/01/18 - Added logic to catch BUG 300800
 ## 10/11/18 - Changed logic in storcli function to include SUs which do not have Data Areas set and have NONE
+## 11/01/18 - Added logic to upload bundle to logalyzer after the script runs. Using Andrew's script
+## 11/19/18 - Added logic to catch bug 297095
+##	      Added logic to catch multiple Report Manager issues
+## 11/30/18 - Added logic to upload the AR11 bundle to logalyzer
+## 12/13/18 - Added more files to SKIPFILES list which can be skipped
 ####################################################################################################################
 
 ####################################################################################################################
                                         ##############TO DO#############
 
 ## 07/19/17 - Implement logic to check if the same error occurs more than once and write accoordingly. This is major change.
-## 07/20/17 - Found storcli_calls_show.txt. Added same storcli logic but that does not work completely. Find out if this
-##            for Gripen or specific models and add logic. Currently calling storcli logic for this file too
 ## 09/05/17 - If the sysdump name is anything besides what the appliance generated then the script would fail.
 ##            This is happening because we are constructing the working folder name based on the filename of the dump.
 ##            If the file is different from the extracted folder name then obviously script does not find the folder
 ##            and does not read any files.
-## 02/15/18 - Need to test logic added on 02/15/18 and 02/01/18 with sysdumps from INVADER or above. For now just verified if the script runs without issues
-##	      even after adding the logic to catch the errors for above 2 changes.
 ###################################################################################################################
 
 
@@ -117,6 +118,7 @@ import stat
 import time
 import io
 import json
+import logalyzer_feeder_direct
 
 start = time.time()
 
@@ -343,7 +345,14 @@ def navigatefolders(workdir):
 		'imgctrl.log',
 		'secure_vault_sysdump.py.out',
 		'system_metrics_sysdump.py.out',
-		'yum.log'
+		'yum.log',
+		'000_main_script.sh.out',
+		'010_list_dirs.sh.out',
+		'020_copy_files.sh.out',
+		'030_commands.sh.out',
+		'report_manager_sysdump.py.out',
+		'CmdTool.log',
+		'diagstash.log'
 		]
     
     
@@ -405,6 +414,7 @@ def navigatefolders(workdir):
 		npmcpthang(logfile)
 		bug291485(logfile,settingsconf)
 		bug294375(logfile)
+		npm_cpt_packetdrops(logfile)
 		errorsandwarns(logfile)
 	    else:
 		if logfile.find('sqldecode')!=-1:
@@ -431,13 +441,22 @@ def navigatefolders(workdir):
 					print('Processing ',logfile)
 					bug300800(logfile)
 					errorsandwarns(logfile)
-			    	else:
-			        	if os.path.basename(logfile) in skipfiles:
-			    			print('Skipping file... ',logfile)
-			        	else:
-			    			print('Processing ',logfile)
+				else:
+				    if (logfile.find('fweb_page.log')!=-1):
+				    	print('Processing ',logfile)
+				    	bug297095(logfile)
+				    	errorsandwarns(logfile)
+				    else:
+					if(logfile.find('report_manager.log')!=-1):
+						print('Processing ',logfile)
+						rptmgrissues(logfile)
 						errorsandwarns(logfile)
-				
+			    	    	else:
+					    if os.path.basename(logfile) in skipfiles:
+						print('Skipping file... ',logfile)
+			        	    else:
+						print('Processing ',logfile)
+						errorsandwarns(logfile)
 
     for logfile in gnrlfiles:
 	if logfile.find('messages')!=-1:
@@ -490,6 +509,99 @@ def navigatefolders(workdir):
 ##            
 ##            dbclose(conn)
 
+##Function to catch issue with reportmanager
+def rptmgrissues(logfile):
+	data_src_fail_cnt = 0
+	mgr_data_src_threshold_cnt = 0
+	sql_col_cnt = 0
+	max_exec_time_cnt = 0
+
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if (line.find('ERROR')!=-1):
+				if (line.find('data source failed')!=-1):
+					data_src_fail_cnt+=1
+				if (line.find('exceeds the threshold of')!=-1):
+					mgr_data_src_threshold_cnt+=1
+				if (line.find('Error loading sql columns')!=-1):
+					sql_col_cnt+=1
+				if (line.find('exceeded maximal executing time')!=-1):
+					max_exec_time_cnt+=1
+
+		if data_src_fail_cnt>0:
+			fwrite.write('\n***** Report Manager data source failed *****\n')
+			fwrite.write('data source failed message occurred - '+str(data_src_fail_cnt)+' times \n')
+			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+		if mgr_data_src_threshold_cnt>0:
+			fwrite.write('\n***** Report Manager datasource exceeds the threshold *****\n')
+			fwrite.write('exceeds the threshold of message occurred - '+str(mgr_data_src_threshold_cnt)+' times\n')
+			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+		if sql_col_cnt>0:
+			fwrite.write('\n***** Report Manager error loading sql columns ******\n')
+			fwrite.write('Error loading sql columns message occurred - '+str(sql_col_cnt)+' times\n')
+			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+		if max_exec_time_cnt>0:
+			fwrite.write('\n***** Report Manager exceeded max execution time *****\n')
+			fwrite.write('exceeds maximal executing time messasge occurred - '+str(max_exec_time_cnt)+' times\n')
+			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+	return
+
+##Function to catch dropped packets in npm capture
+def npm_cpt_packetdrops(logfile):
+	cnt = 0
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if(line.find('will be dropped')!=-1):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** NPM Capture packet drops ******\n')
+			fwrite.write('npm_capture dropping packets\n')
+			fwrite.write('pkts will be dropped messages occurtred - '+str(cnt)+' times\n')
+			fwrite.write('For more details please take a look at /data/log/npm_capture/npm_capture.log\n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+		
+	return
+
+##Function to catch bug 297095
+def bug297095(logfile):
+	cnt = 0
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if(line.find('ERROR')!=-1 and line.find('data_time_matches_eom_time')!=-1):
+				cnt+=1
+		if cnt>0:
+			fwrite.write('\n***** Filters:Data time matches eom error ******\n')
+			fwrite.write('data_time_matches_eom_time error occurred - '+str(cnt)+' times\n')
+			fwrite.write('Possibly bug 297095. Check https://bugzilla.nbttech.com/show_bug.cgi?id=297075\n')
+			fwrite.write('For more details please take a look at /data/log/npm_aggregration/fweb_page.log \n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+	return
+
 ##Function to catch bug 300800
 def bug300800(logfile):
 	cnt = 0
@@ -501,7 +613,7 @@ def bug300800(logfile):
 			if (line.find('ERROR')!=-1 and line.find('Could not GET live data timestamps')!=-1):
 				cnt+=1
 		if cnt>0:
-			fwrite.write('\n*****BUG 300800 ******\n')
+			fwrite.write('\n***** BUG 300800 ******\n')
 			fwrite.write('read_live_data_defs_client Could not GET live data timestamps occured - '+str(cnt)+' times\n')					       
 			fwrite.write('Possibly bug 300800. Check https://bugzilla.nbttech.com/show_bug.cgi?id=300800\n')
 			fwrite.write('For more details please take a look at /data/log/policy_manager/policy_manager.log \n')
@@ -526,7 +638,7 @@ def stitcherdrops(logfile):
 					cnt.append(line)
 
 		if len(cnt)>0:
-			fwrite.write('\n*****Stitcher:Dropping pages to aggregrates ***** \n')
+			fwrite.write('\n***** Stitcher:Dropping pages to aggregrates ***** \n')
 			fwrite.write('Message with error Aggregates: cant get SMQ element occurred - '+str(sum('#5204' in s for s in cnt))+' times \n')
 			fwrite.write('Message with error Aggregates: cant allocate output block - '+str(sum('#5202' in s for s in cnt))+' times \n')
 			fwrite.write('For more details on the errors please take a look at /data/log/stitcher/error.log \n')
@@ -580,7 +692,7 @@ def call_traces(logfile):
 				trclst.append(line)		
 		
 		if len(trclst)>0:
-			fwrite.write('\n'+'******Call Traces in file '+ str(logfile)+'******' + '\n\n')
+			fwrite.write('\n'+'****** Call Traces in file '+ str(logfile)+'******' + '\n\n')
 			for x in trclst:
 				fwrite.write(x)
 
@@ -1575,6 +1687,21 @@ def weblinks(path,filename,systemdetails):
 	
 	print('\n***********************************\n')
 
+##Function to upload bundle to logalyzer
+def logalyzer_upload(email,title,customer,file_name):
+        try:
+                print('Uploading bundle to logalyzer... ')
+
+                options = logalyzer_feeder_direct.LogalyzerOptions(email)
+                options.eat_exception = True
+                feeder = logalyzer_feeder_direct.Logalyzer(options)
+                response, error = feeder.go(title,customer,file_name,'appresponse-alloy')
+
+                print error
+
+        except Exception as e:
+                print e
+
 ##Function to get configuration and other system details
 def configdetails(logfile):
     
@@ -1657,6 +1784,12 @@ def main():
 
     filename = str(casenum)+'_'+'errorsandwarns.txt'
     systemdetails = str(casenum)+'_'+'systemdetails.txt'
+
+    email = str(casenum)+'@riverbedsupport.com'
+    title = 'AR11_logs_'+str(casenum)
+    customer = 'Global Support'
+    file_name = os.path.abspath(path)
+
     settingsconf = ''
 ##    cpu = str(casenum)+'_'+'cpu.dat'
 ##    mem = str(casenum)+'_'+'mem.dat'
@@ -1665,7 +1798,8 @@ def main():
     workdir = unzip(path)
     navigatefolders(workdir)
     changeperm(workdir)
-    weblinks(path,filename,systemdetails)        
+    weblinks(path,filename,systemdetails)
+    logalyzer_upload(email,title,customer,file_name)
 ##    movefiles(path)
 ##    cleanup()
     end = time.time()
