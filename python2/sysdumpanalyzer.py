@@ -96,6 +96,14 @@
 ##	      Added logic to catch multiple Report Manager issues
 ## 11/30/18 - Added logic to upload the AR11 bundle to logalyzer
 ## 12/13/18 - Added more files to SKIPFILES list which can be skipped
+## 01/15/19 - Skip history_bt.txt in coredumps folders in the count of corefiles
+## 01/21/19 - Added logic to get Packet Acceleration details from settings.conf file in Kfir
+##            Added logic to catch BUG 306278	
+## 01/28/19 - Bug fix for data area usage section. Using YAML module
+## 02/04/19 - Added logic to get Hardware details like Fan RPM and Temperatures
+##	      Added logic to catch MySQL connection issues with Reportmanagerd
+## 02/13/19 - Added logic to catch the UnboundLocalError which triggered when there is mismatch between .tgz name
+##            and the folder which is extracted. Print an error to mention the above so EE's can correct the name
 ####################################################################################################################
 
 ####################################################################################################################
@@ -118,6 +126,7 @@ import stat
 import time
 import io
 import json
+import yaml
 import logalyzer_feeder_direct
 
 start = time.time()
@@ -183,12 +192,15 @@ def unzip(filepath):
     zfile.close()
     
     print('Finished unzipping the bundle...')
-    
-    if filename.split('.')[0] in os.listdir(extractpath):
-	workdir = os.path.abspath(filename.split('.')[0])
-    else:
-	if filename[filename.index('sysdump'):].split('.')[0] in os.listdir(extractpath):
-		workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
+   
+    try: 
+    	if filename.split('.')[0] in os.listdir(extractpath):
+		workdir = os.path.abspath(filename.split('.')[0])
+    	else:
+		if filename[filename.index('sysdump'):].split('.')[0] in os.listdir(extractpath):
+			workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
+    except UnboundLocalError:
+	print('The filename and the unzipped directory name do not match',file_tar,file_untar)
 
     return workdir
 
@@ -352,7 +364,8 @@ def navigatefolders(workdir):
 		'030_commands.sh.out',
 		'report_manager_sysdump.py.out',
 		'CmdTool.log',
-		'diagstash.log'
+		'diagstash.log',
+		'stitcher_sysdump.py.out'
 		]
     
     
@@ -414,6 +427,7 @@ def navigatefolders(workdir):
 		npmcpthang(logfile)
 		bug291485(logfile,settingsconf)
 		bug294375(logfile)
+		bug306278(logfile)
 		npm_cpt_packetdrops(logfile)
 		errorsandwarns(logfile)
 	    else:
@@ -469,8 +483,8 @@ def navigatefolders(workdir):
 ##Get list of all core files
     for logfile in configfiles:
         for foldername in folderstoread:
-            if foldername in logfile:
-                corefiles.append(logfile)
+            if (foldername in logfile) and (logfile.find('history_bt')==-1):
+		corefiles.append(logfile)
 
 
     for logfile in sqlfiles:
@@ -515,6 +529,7 @@ def rptmgrissues(logfile):
 	mgr_data_src_threshold_cnt = 0
 	sql_col_cnt = 0
 	max_exec_time_cnt = 0
+	mysql_conn_cnt = 0
 
 	try:
 		fobj = openfile(logfile)
@@ -530,6 +545,8 @@ def rptmgrissues(logfile):
 					sql_col_cnt+=1
 				if (line.find('exceeded maximal executing time')!=-1):
 					max_exec_time_cnt+=1
+				if (line.find('Unable to retrieve data from MySQL: Connection attempt failed:')!=-1):
+					mysql_conn_cnt+=1
 
 		if data_src_fail_cnt>0:
 			fwrite.write('\n***** Report Manager data source failed *****\n')
@@ -547,6 +564,11 @@ def rptmgrissues(logfile):
 			fwrite.write('\n***** Report Manager exceeded max execution time *****\n')
 			fwrite.write('exceeds maximal executing time messasge occurred - '+str(max_exec_time_cnt)+' times\n')
 			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+		if mysql_conn_cnt>0:
+			fwrite.write('\n***** Report Manager MySQL connection issues *****\n')
+			fwrite.write('Unable to retrieve data from MySQL: Connection attempt failed:'+str(mysql_conn_cnt)+' times\n')
+			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+	
 	except Exception as e:
 		print(e)
 
@@ -569,7 +591,7 @@ def npm_cpt_packetdrops(logfile):
 		if cnt>0:
 			fwrite.write('\n***** NPM Capture packet drops ******\n')
 			fwrite.write('npm_capture dropping packets\n')
-			fwrite.write('pkts will be dropped messages occurtred - '+str(cnt)+' times\n')
+			fwrite.write('pkts will be dropped messages occurred - '+str(cnt)+' times\n')
 			fwrite.write('For more details please take a look at /data/log/npm_capture/npm_capture.log\n')
 	except Exception as e:
 		print(e)
@@ -624,6 +646,31 @@ def bug300800(logfile):
 	fwrite.close()
 
 	return
+
+##Function to catch bug 306278
+def bug306278(logfile):
+	try:
+		cnt = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if (line.find('FATAL')!=-1 and line.find('pkts_in_blk_read <= pkts_in_blk')!=-1):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** BUG 306278 ******\n')
+			fwrite.write(r"Assertion 'pkts_in_blk_read <= pkts_in_blk' occurred - "+str(cnt)+' times\n')
+			fwrite.write('This might lead to npm_capture core dumping.\n')
+			fwrite.write('Possibly bug 306278. Check https://bugzilla.nbttech.com/show_bug.cgi?id=306278\n')
+			fwrite.write('For more details please take a look at /data/log/npm_capture/npm_capture.log \n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
 ##Function to catch Stitcher drops to aggregrate
 def stitcherdrops(logfile):
 	srchstrngs = ['#5204','#5203','#5202']
@@ -943,7 +990,7 @@ def coredetails(cdmpfiles):
                 
                 k = tmp[:pos-1]
                 v = tmp[pos:]
-
+		
                 dict.update({k:v})
          
         for key,value in dict.items():
@@ -955,22 +1002,26 @@ def coredetails(cdmpfiles):
 
 ##Write first 100 lines backtrace from latest core file
 def backtraceltst(crdmpltst):
-    n = 100
-    fobj = openfile(crdmpltst)
+    try:
+        n = 100
+        fobj = openfile(crdmpltst)
 
-    fwrite = open(filename,'a')
+        fwrite = open(filename,'a')
 
-    fwrite.write('\n***** backtrace details ***** \n')
-    fwrite.write(crdmpltst)
-    fwrite.write('\n')
+        fwrite.write('\n***** backtrace details ***** \n')
+        fwrite.write(crdmpltst)
+        fwrite.write('\n')
 
-    for i in range(1,n):
-        line = fobj.readline()
-        if line.startswith('[New') == False:
-            fwrite.write(line)
+        for i in range(1,n):
+            line = fobj.readline()
+            if line.startswith('[New') == False:
+                fwrite.write(line)
+            
+        fwrite.close()
+        closefile(fobj)
         
-    fwrite.close()
-    closefile(fobj)
+    except Exception as e:
+        print(str(e)+'\n')
     
 ##Function to search for all Errors and Warnings in log files
 def errorsandwarns(logfile):
@@ -1395,37 +1446,35 @@ def layout(logfile):
 
 ##Function to get the space usage for data areas
 def dataarea(logfile):
-	arr = ['']*3	
+	data = (yaml.load(open(logfile)))
 	global finaldata
 	finaldata = {}
 
 	try:
-		fobj = openfile(logfile)
-	
-		for line in fobj:
-			if line.find('data_module_name:')!=-1:
-				arr[0] = line.split(':')[1].strip()
-			if line.find('quota_size_mb')!=-1:
-				arr[1] = line.split(':')[1].strip()
-			if line.find('used_space_mb')!=-1:
-				arr[2] = line.split(':')[1].strip()
+		if 'data_areas' in data:
+			data_areas = data['data_areas']
 		
-			if (arr[0]!='' and arr[1]!='' and arr[2]!=''):
-				##print(str(arr[0])+'-'+str(arr[1])+'-'+str(arr[2]))
-				if arr[0] not in finaldata:
-					finaldata.update({arr[0]:[arr[1],arr[2]]})
-					arr = ['']*3
-##		print(finaldata)
-##		for key,value in finaldata.items():
-##			print(key)
-##			print('Quota- ',str(value[0]))
-##			print('Used- ',str(value[1]))
+			for data_area_item in data_areas:
+				data_module_name = ""
+				data_section_id = ""
+				quota_size_mb = ""
+				used_space_mb = ""
+
+				if 'data_module_name' in data_area_item:
+					data_module_name = data_area_item['data_module_name']
+				if 'data_section_id' in data_area_item:
+					data_section_id = data_area_item['data_section_id']
+				if 'quota_size_mb' in data_area_item:
+					quota_size_mb = data_area_item['quota_size_mb']
+				if 'used_space_mb' in data_area_item:
+					used_space_mb = data_area_item['used_space_mb']
+
+				if data_module_name != "" and data_section_id == "primary_data" and quota_size_mb != "" and used_space_mb != "":
+					if data_module_name not in finaldata:
+						finaldata.update({data_module_name:[quota_size_mb,used_space_mb]})
 	except Exception as e:
-		finaldata = {}
-		print('Unable to open file.... ',logfile)
-	
-	closefile(fobj)
-	
+		print(e)
+
 	return finaldata
 
 ##Function to get the latest upgrade time stamp
@@ -1595,6 +1644,24 @@ def ip2iptrafcongestion(logfile):
 
 	return
 
+##Function to get details of the packet acceleration details in Kfir
+def pktexportaccl(logfile):
+	try:
+
+		config = json.load(open(logfile))
+		fwrite = open(systemdetails,'a')
+		
+		for key,value in config.items():
+			if str(key)=='packet_export_acceleration':
+				fwrite.write('\n***** Packet Acceleration Details ******\n')
+				for k,v in value.items():
+					fwrite.write(str(k)+':'+str(v)+'\n')
+
+		fwrite.close()
+
+	except Exception as e:
+		print(e)
+
 ##Function to check existence of slab settings file
 def bug288879(logfile):
     fobj  = openfile(logfile)
@@ -1625,7 +1692,29 @@ def dpi(logfile):
 				fwrite.write('Please check https://bugzilla.nbttech.com/show_bug.cgi?id=293099 \n \n')
 	
 	closefile(fobj)
-	fwrite.close()		
+	fwrite.close()
+
+##Function to get hardware status
+def hardwarestatus(logfile):
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+		keys = ['Pwr Unit Status','Front Panel Temp ','Exit Air Temp ','System Fan','Sys Fan','SYS_Air_Inlet','SYS_Air_Outlet','SYS_FAN_']
+		details = []
+
+		for line in fobj:
+			for key in keys:
+				if key.strip() in line:
+					details.append(line)
+
+		if len(details)>0:
+			fwrite.write('\n***** Hardware Details ***** \n')
+			for x in details:
+				fwrite.write(x.strip()+'\n')
+				##print(x.strip())
+
+	except Exception as e:
+		print(e)	
 
 ##Function to parse JSON file
 def jsonparse(logfile):
@@ -1647,6 +1736,7 @@ def confiles(logfile):
         bug288879(logfile)
     if(logfile.find('settings.conf')!=-1):
         settingsconf = logfile
+	pktexportaccl(logfile)
     if(logfile.find('probe.conf')!=-1):
 	dpi(logfile)
 
@@ -1746,6 +1836,9 @@ def configdetails(logfile):
 						    else:
 							if(logfile.find('secure_vault_rest_state.txt')!=-1):
                                                             secure_vault_status(logfile)
+							else:
+							    if(logfile.find('ipmi_sdr_elist_all.txt')!=-1 or logfile.find('ipmi_sdr.txt')!=-1):
+								hardwarestatus(logfile)
 ##Function to move files to location where the bundle is present
 ####def movefiles(path):
 ####    cwd = os.getcwd()
@@ -1795,7 +1888,13 @@ def main():
 ##    mem = str(casenum)+'_'+'mem.dat'
 ##    probe = str(casenum)+'_'+'probe.dat'
     cleanup(path,filename,systemdetails)
-    workdir = unzip(path)
+
+    try:
+    	workdir = unzip(path)
+    except UnboundLocalError:
+	print('The file name probably does not match the unzipped folder name')
+        exit()
+
     navigatefolders(workdir)
     changeperm(workdir)
     weblinks(path,filename,systemdetails)
