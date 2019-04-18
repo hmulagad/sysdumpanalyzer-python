@@ -104,6 +104,13 @@
 ##	      Added logic to catch MySQL connection issues with Reportmanagerd
 ## 02/13/19 - Added logic to catch the UnboundLocalError which triggered when there is mismatch between .tgz name
 ##            and the folder which is extracted. Print an error to mention the above so EE's can correct the name
+## 02/28/19 - Added logic to catch BUG 307140
+## 03/05/19 - Added logic to pass arguments using sys.argv
+##	      Added logic to pass optional description to distinguisgh logalyzer reports
+## 03/11/19 - Added logic to get the Handle details from probe.log
+## 03/25/19 - Added logic to catch missing sysdump file name with .tgz
+## 04/10/19 - Added logic to catch - MIfG errors, NIC up/down events BUG 307680
+## 04/15/19 - Added logic to catch FATAL blocked queries in report manager log
 ####################################################################################################################
 
 ####################################################################################################################
@@ -127,6 +134,7 @@ import time
 import io
 import json
 import yaml
+import sys
 import logalyzer_feeder_direct
 
 start = time.time()
@@ -199,6 +207,7 @@ def unzip(filepath):
     	else:
 		if filename[filename.index('sysdump'):].split('.')[0] in os.listdir(extractpath):
 			workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
+##	print(workdir)
     except UnboundLocalError:
 	print('The filename and the unzipped directory name do not match',file_tar,file_untar)
 
@@ -365,7 +374,8 @@ def navigatefolders(workdir):
 		'report_manager_sysdump.py.out',
 		'CmdTool.log',
 		'diagstash.log',
-		'stitcher_sysdump.py.out'
+		'stitcher_sysdump.py.out',
+		'temporal_data_store-probe.log'
 		]
     
     
@@ -417,9 +427,10 @@ def navigatefolders(workdir):
         confiles(logfile)
 
     for logfile in filelist:
-        if logfile.find('probe.log')!=-1:
-            print('Processing ',logfile)
+        if (logfile.find('probe.log')!=-1 and logfile.find('temporal_data_store-probe.log')==-1):
             probehang(logfile)
+	    probeexports(logfile)
+	    MIfGopenerr(logfile)
             errorsandwarns(logfile)
 	else:
 	    if logfile.find('npm_capture.log')!=-1:
@@ -428,7 +439,9 @@ def navigatefolders(workdir):
 		bug291485(logfile,settingsconf)
 		bug294375(logfile)
 		bug306278(logfile)
+		bug307140(logfile)
 		npm_cpt_packetdrops(logfile)
+		##npmpktreaders(logfile)
 		errorsandwarns(logfile)
 	    else:
 		if logfile.find('sqldecode')!=-1:
@@ -473,13 +486,17 @@ def navigatefolders(workdir):
 						errorsandwarns(logfile)
 
     for logfile in gnrlfiles:
-	if logfile.find('messages')!=-1:
+	if (logfile.find('messages')!=-1 and logfile.find('diagstash')==-1):
 		outofsync(logfile)
 		call_traces(logfile)
+		nicupdown(logfile)
 		errorsandwarns(logfile)
+	elif logfile.find('storage_services')!=-1:
+		bug307680(logfile)
 	else:
 		print('Processing ',logfile)
 		errorsandwarns(logfile)
+
 ##Get list of all core files
     for logfile in configfiles:
         for foldername in folderstoread:
@@ -523,6 +540,7 @@ def navigatefolders(workdir):
 ##            
 ##            dbclose(conn)
 
+
 ##Function to catch issue with reportmanager
 def rptmgrissues(logfile):
 	data_src_fail_cnt = 0
@@ -530,13 +548,15 @@ def rptmgrissues(logfile):
 	sql_col_cnt = 0
 	max_exec_time_cnt = 0
 	mysql_conn_cnt = 0
+	pageviewload = 0
+	blocked_query = 0
 
 	try:
 		fobj = openfile(logfile)
 		fwrite = open(systemdetails,'a')
 
 		for line in fobj:
-			if (line.find('ERROR')!=-1):
+			if (line.find('ERROR')!=-1 or line.find('FATAL')!=-1):
 				if (line.find('data source failed')!=-1):
 					data_src_fail_cnt+=1
 				if (line.find('exceeds the threshold of')!=-1):
@@ -547,28 +567,43 @@ def rptmgrissues(logfile):
 					max_exec_time_cnt+=1
 				if (line.find('Unable to retrieve data from MySQL: Connection attempt failed:')!=-1):
 					mysql_conn_cnt+=1
+				if (line.find('caught npm exception while executing schedule: print engine timeout after')!=-1):
+					pageviewload+=1
+				if (line.find('Blocked queries detected in data source')!=-1):
+					blocked_query+=1
 
 		if data_src_fail_cnt>0:
 			fwrite.write('\n***** Report Manager data source failed *****\n')
 			fwrite.write('data source failed message occurred - '+str(data_src_fail_cnt)+' times \n')
-			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+			fwrite.write('For more details please take a look at report manager logs in /data/log/report_manager\n')
 		if mgr_data_src_threshold_cnt>0:
 			fwrite.write('\n***** Report Manager datasource exceeds the threshold *****\n')
 			fwrite.write('exceeds the threshold of message occurred - '+str(mgr_data_src_threshold_cnt)+' times\n')
-			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+			fwrite.write('For more details please take a look at report manager logs in /data/log/report_manager\n')
 		if sql_col_cnt>0:
 			fwrite.write('\n***** Report Manager error loading sql columns ******\n')
 			fwrite.write('Error loading sql columns message occurred - '+str(sql_col_cnt)+' times\n')
-			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+			fwrite.write('For more details please take a look at report manager logs in /data/log/report_manager\n')
 		if max_exec_time_cnt>0:
 			fwrite.write('\n***** Report Manager exceeded max execution time *****\n')
 			fwrite.write('exceeds maximal executing time messasge occurred - '+str(max_exec_time_cnt)+' times\n')
-			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
+			fwrite.write('For more details please take a look at report manager logs in /data/log/report_manager\n')
 		if mysql_conn_cnt>0:
 			fwrite.write('\n***** Report Manager MySQL connection issues *****\n')
 			fwrite.write('Unable to retrieve data from MySQL: Connection attempt failed:'+str(mysql_conn_cnt)+' times\n')
-			fwrite.write('For more details please take a look report manager logs in /data/log/report_manager\n')
-	
+			fwrite.write('For more details please take a look at report manager logs in /data/log/report_manager\n')
+		if pageviewload>0:
+			fwrite.write('\n***** Page Views slow loads *****\n')
+			fwrite.write('Possible time outs while loading Page views in Page View insights\n')
+			fwrite.write('For more details please take a look at report manager logs in /data/log/report_manager\n')
+			fwrite.write('Possibly Bug#305937. Please take a look at https://bugzilla.nbttech.com/show_bug.cgi?id=305937\n')
+		if blocked_query>0:
+			fwrite.write('\n***** ReportManager FATAL ***** \n')
+			fwrite.write('Blocked queries detected in data source: occurred {0} times\n'.format(blocked_query))
+			fwrite.write('Look for Report Manager coredumps and also which data source is having issues from the log\n')
+			fwrite.write('Might indicate data source became unresponsive\n')
+			fwrite.write('Please check /data/log/report_manager/report_manager.log for more details...\n')
+
 	except Exception as e:
 		print(e)
 
@@ -576,6 +611,28 @@ def rptmgrissues(logfile):
 	fwrite.close()
 
 	return
+
+##Function get list of packet readers from npm_capture
+def npmpktreaders(logfile):
+	try:
+		readers = []
+		fobj = openfile(logfile)
+		
+		for line in fobj:
+			if (line.find('npm_capture::cap_job::packet_reader_thread(int)')!=-1 and line.find('Starting pkt_reader')!=-1):
+				##print(line)
+				tmp = (line.split('pkt_reader')[1])
+				values = (tmp.split(' '))
+
+				if values[1] not in readers:
+					readers.append(values[1])
+
+		fobj.close()
+
+	except Exception as e:
+		print(e)
+
+	return readers
 
 ##Function to catch dropped packets in npm capture
 def npm_cpt_packetdrops(logfile):
@@ -671,6 +728,55 @@ def bug306278(logfile):
 	fobj.close()
 	fwrite.close()
 
+##Function to catch bug 307140
+def bug307140(logfile):
+	try:
+		cnt = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if (line.find('ERROR')!=-1 and line.find('Error opening file /data/packet_storage/primary_capture_data/')!=-1):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** BUG 307140 ******\n')
+			fwrite.write('(If the appliance is not ARX-12/2200 then this bug does not apply)\n\n')
+			fwrite.write('Error opening file /data/packet_storage/primary_capture_data occurred {0} times\n'.format(cnt))
+			fwrite.write('Possibly bug 307140. Check https://bugzilla.nbttech.com/show_bug.cgi?id=307140\n')
+			fwrite.write('For more details please take a look at /data/log/npm_capture/npm_capture.log \n')
+
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+##Function to catch bug 307680
+def bug307680(logfile):
+	try:
+		cnt = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if(('ERROR' in line) and ('Error enforcing quota for' in line) and ('UNABLE TO OPEN TABLE' in line)):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** BUG 307680 *****\n')
+			fwrite.write('Error enforcing quota data areas, Unable to open table occurred {0} times\n'.format(cnt))
+			fwrite.write('Possibly bug 307680 https://bugzilla.nbttech.com/show_bug.cgi?id=307680\n')
+			fwrite.write('However if it occurs during a data move (like a packet priority to metric priority mode switch),\nit is harmless and is triggered because certain services are not enabled and running during the switch operation\n')
+			fwrite.write('Please take a look at /var/log/storage_services for more details...\n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
 ##Function to catch Stitcher drops to aggregrate
 def stitcherdrops(logfile):
 	srchstrngs = ['#5204','#5203','#5202']
@@ -714,6 +820,7 @@ def tdsasadrops(logfile):
 			if len(cnt)>0:
 				fwrite.write('\n***** TDS ASA data being dropped*****\n')
 				fwrite.write('Message - '+strng+' Occurred '+str(len(cnt))+' Times \n')
+				fwrite.write('Possibly bug https://bugzilla.nbttech.com/show_bug.cgi?id=296433\n')
 				fwrite.write('Look in fsrvcltraf.log for more details. \n')
 			cnt=[]
 
@@ -725,6 +832,28 @@ def tdsasadrops(logfile):
 	fwrite.close()
 
 	return
+
+##Function to get the NIC up/down from messages
+def nicupdown(logfile):
+	try:
+		cnt = 0
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if('primary NIC Link is' in line):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** Primary NIC up/down *****\n')
+			fwrite.write('Primary NIC either went up or down. These events happened {0} times\n'.format(cnt))
+			fwrite.write('Please check /var/log/messages for more details...\n')
+
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
 
 ##Function to catch Call Traces in messages
 def call_traces(logfile):
@@ -868,6 +997,7 @@ def bug291485(logfile,settingsconf):
 
             for n in fobj:
                 if (n.find('ANUE')!=-1 or n.find('GIGAMON_TRAILER')!=-1):
+		    fwrite.write('\n***** Packet Broker Configuration *****\n')
                     fwrite.write('Found '+ str(n.strip()) + ' in settings.conf file \n')
                     fwrite.write('Change packet_broker configuration to NONE \n')
 
@@ -933,6 +1063,86 @@ def probehang(logfile):
     except UnicodeDecodeError:
         print('Unable to open file... ',logfile)
 
+##Function to get the handle details
+def handlefilterdetails(logfile,handle):
+	try:
+		fobj = openfile(logfile)
+		
+		for line in fobj:
+			if ((line.find('packet_processor.cc')!=-1 and line.find('Handle {0} input filter - Type: cube'.format(handle))!=-1)):
+				cube_filter = (line.split('cube')[1])
+				
+		fobj.close()
+
+	except Exception as e:
+		print(e)
+
+	return cube_filter
+
+##Function to get the list probe exports handle IDs
+def probeexports(logfile):
+	try:
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		fwrite.write('\n***** Probe Handle Details *****\n')
+
+		for line in fobj:
+			if (line.find('packet_processor.cc')!=-1 and line.find('Processing Complete:')!=-1 and line.find('EXPORT.')!=-1):
+			##if (line.find('packet_processor.cc')!=-1 and line.find('Processing Complete:')!=-1 and line.find('Time:')!=-1 and line.find('Packets:')!=-1):
+				s = str(line.split('Processing')[1]).split(' ')
+				msg = ''
+				cube_filter = ''
+
+				if (float(s[5])>=300 and float(s[9])<=1000):
+					msg = '(Packet download took >300s & Packet Throughput <1000pps)'
+				elif (float(s[5])>=300):
+					msg = '(Packet download took >300s)'
+				elif (float(s[9])<=1000):
+					msg = '(Packet Throughput <1000pps)'
+				else:
+					msg = '(OK)'
+
+				try:				
+					cube_filter = handlefilterdetails(logfile,str(s[2]))
+
+				except Exception as e:
+					print(e)
+
+				if len(cube_filter)!=0:
+					fwrite.write('Handle {0} Filter {1}'.format(s[2],cube_filter))
+					fwrite.write(('Handle {0} took {1}s with {2}pps - {3}\n\n').format(s[2],s[5],s[9],msg))
+				else:
+					fwrite.write(('Handle {0} took {1}s with {2}pps - {3}\n\n').format(s[2],s[5],s[9],msg))
+
+		fobj.close()
+		fwrite.close()
+
+	except Exception as e:
+		print(e)
+
+##Function to catch unable to open MIfG errors
+def MIfGopenerr(logfile):
+	try:
+		cnt = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if ('ERROR' in line and 'dispatcher_input: impossible to open adapter MIfG - impossible to open npm capture' in line):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** Impossible to open adapter MIfG *****\n')
+			fwrite.write('dispatcher_input: impossible to open adapter MIfG - impossible to open npm capture occurred {0} times\n'.format(cnt))
+			fwrite.write('Please check /data/log/probe/probe.log for more details...\n')
+
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
 
 ##Function to check if there is a possible issue with npm capture dropping traffic because of buffrer overflows
 def npmcpthang(logfile):
@@ -1762,6 +1972,7 @@ def weblinks(path,filename,systemdetails):
 	errURL = ''
 
 	tmpPath = str(os.path.dirname(path))[str(os.path.dirname(path)).index('data/'):]
+	##print(str(os.path.dirname(path))[str(os.path.dirname(path)).index('data/'):])
 	
 	sysURL = baseURL+tmpPath+'/'+systemdetails
 	errURL = baseURL+tmpPath+'/'+filename
@@ -1855,6 +2066,50 @@ def configdetails(logfile):
 ####                 os.remove(os.path.join(dst,file))
 ####                 shutil.move(os.path.abspath(file),dst)
 
+##Function to set details when we have 4 arguments
+def setdetails4(argv):
+	try:
+		if (argv[1].isdigit() and str(argv[0]).find('.tgz')!=-1):
+			if argv[2]!='':
+				path = argv[0]
+				casenum = argv[1]
+				filename = str(casenum)+'_'+str(argv[2])+'_errorsandwarns.txt'
+				systemdetails = str(casenum)+'_'+str(argv[2])+'_systemdetails.txt'
+				title = str('AR11_logs_'+str(casenum)+'_'+str(argv[2])).rstrip()
+			else:
+				path = argv[0]
+                                casenum = argv[1]
+                                filename = str(casenum)+'_errorsandwarns.txt'
+                                systemdetails = str(casenum)+'_systemdetails.txt'
+                                title = str('AR11_logs_'+str(casenum)).rstrip()
+		else:
+			print('Usage: python script_name path_to_sysdump case_number <optional Desc>')
+			print('\nCase number should be numeric only\nFile name need to end with .tgz')
+			exit()
+
+	except Exception as e:
+		print(e)
+
+	return path,casenum,filename,systemdetails,title
+
+##Function to set details when we have 3 arguments
+def setdetails3(argv):
+        try:
+                if (argv[1].isdigit() and str(argv[0]).find('.tgz')!=-1):
+			path = argv[0]
+                        casenum = argv[1]
+                        filename = str(casenum)+'_errorsandwarns.txt'
+                        systemdetails = str(casenum)+'_systemdetails.txt'
+                        title = str('AR11_logs_'+str(casenum)).rstrip()
+                else:
+                        print('Usage: python script_name path_to_sysdump case_number <optional Desc>')
+			print('\nCase number should be numeric only\nFile name need to end with .tgz')
+                        exit()
+
+        except Exception as e:
+                print(e)
+
+        return path,casenum,filename,systemdetails,title
                 
 ##Main function
 def main():
@@ -1864,22 +2119,22 @@ def main():
     global mem
     global probe
     global settingsconf
-        
-    print('Enter the full path to sysdump :')
-    path = raw_input()
 
-    while True:
-        print('Enter valid case number :')
-        casenum = raw_input()
-
-        if casenum.isdigit():
-            break
-
-    filename = str(casenum)+'_'+'errorsandwarns.txt'
-    systemdetails = str(casenum)+'_'+'systemdetails.txt'
+    if len(sys.argv)==4:
+	try:
+		path,casenum,filename,systemdetails,title = setdetails4(sys.argv[1:])
+	except Exception as e:
+		print(e)
+    elif len(sys.argv)==3:
+	try:
+		path,casenum,filename,systemdetails,title = setdetails3(sys.argv[1:])
+	except Exception as e:
+		print(e)
+    else:
+	print('\nUsage: python script_name path_to_sysdump case_number <optional Desc>')
+	exit()
 
     email = str(casenum)+'@riverbedsupport.com'
-    title = 'AR11_logs_'+str(casenum)
     customer = 'Global Support'
     file_name = os.path.abspath(path)
 
@@ -1897,7 +2152,10 @@ def main():
 
     navigatefolders(workdir)
     changeperm(workdir)
-    weblinks(path,filename,systemdetails)
+    try:
+    	weblinks(path,filename,systemdetails)
+    except Exception as e:
+	print e
     logalyzer_upload(email,title,customer,file_name)
 ##    movefiles(path)
 ##    cleanup()
