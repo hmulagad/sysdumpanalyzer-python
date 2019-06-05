@@ -111,6 +111,10 @@
 ## 03/25/19 - Added logic to catch missing sysdump file name with .tgz
 ## 04/10/19 - Added logic to catch - MIfG errors, NIC up/down events BUG 307680
 ## 04/15/19 - Added logic to catch FATAL blocked queries in report manager log
+## 05/14/19 - Added key for System Event Log in hardwarestatus function
+## 05/15/19 - Added logic to write # intervals for probe handle details.
+## 05/28/19 - Added logic to get the VIFG grouping type
+## 06/05/19 - Added logic to catch IO Error in storage services
 ####################################################################################################################
 
 ####################################################################################################################
@@ -441,6 +445,7 @@ def navigatefolders(workdir):
 		bug306278(logfile)
 		bug307140(logfile)
 		npm_cpt_packetdrops(logfile)
+		currentblock_openfile(logfile)
 		##npmpktreaders(logfile)
 		errorsandwarns(logfile)
 	    else:
@@ -493,6 +498,7 @@ def navigatefolders(workdir):
 		errorsandwarns(logfile)
 	elif logfile.find('storage_services')!=-1:
 		bug307680(logfile)
+		IOerror(logfile)
 	else:
 		print('Processing ',logfile)
 		errorsandwarns(logfile)
@@ -634,6 +640,33 @@ def npmpktreaders(logfile):
 
 	return readers
 
+##Function catch issues with writing to a file and also block issues
+def currentblock_openfile(logfile):
+	try:
+		blkissue = 0
+		openissue = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if (re.search('ERROR.*Error opening file .* for writing',line)):
+				openissue+=1
+			elif(re.search('ERROR.*The volume.* does not exist or is invalid',line)):
+				blkissue+=1
+
+		if openissue>0:
+			fwrite.write('\n***** Error opening file for writing *****\n')
+			fwrite.write('npm_capture error opening file for writing occurred {0} times\n'.format(openissue))
+			fwrite.write('Please take a look at npm_capture logs for more details...\n')
+		if blkissue>0:
+			fwrite.write('\n***** Volume does not exist/Invalid *****\n')
+			fwrite.write('npm_capture volume does not exist or invalid occurred {0} times\n'.format(blkissue))
+			fwrite.write('Please take a look at npm_capture logs for more details...\n')
+
+	except Exception as e:
+		print(e)
+
 ##Function to catch dropped packets in npm capture
 def npm_cpt_packetdrops(logfile):
 	cnt = 0
@@ -771,6 +804,28 @@ def bug307680(logfile):
 			fwrite.write('Possibly bug 307680 https://bugzilla.nbttech.com/show_bug.cgi?id=307680\n')
 			fwrite.write('However if it occurs during a data move (like a packet priority to metric priority mode switch),\nit is harmless and is triggered because certain services are not enabled and running during the switch operation\n')
 			fwrite.write('Please take a look at /var/log/storage_services for more details...\n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+##Function to catch IOError in storage_services
+def IOerror(logfile):
+	try:
+		cnt = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if(('WARNING' in line) and ('Data section' in line) and ('IO error' in line)):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** Storage Service IO Error ******\n')
+			fwrite.write('IO error on data section for a SU happened {0} times\n'.format(cnt))
+			fwrite.write('Please take a look at {0} for more details...\n'.format(logfile))
 	except Exception as e:
 		print(e)
 
@@ -1065,19 +1120,22 @@ def probehang(logfile):
 
 ##Function to get the handle details
 def handlefilterdetails(logfile,handle):
+	cube_filter = ''
+	intervals = ''
 	try:
 		fobj = openfile(logfile)
-		
+
 		for line in fobj:
 			if ((line.find('packet_processor.cc')!=-1 and line.find('Handle {0} input filter - Type: cube'.format(handle))!=-1)):
 				cube_filter = (line.split('cube')[1])
-				
+			elif (line.find('index_helper.cc')!=-1 and line.find('PipeToTimeFilter /data/probe/microflowindex/')!=-1 and line.find(handle)!=-1):
+				intervals = (line.split('mfindex/microflows: ')[1])
 		fobj.close()
 
 	except Exception as e:
 		print(e)
 
-	return cube_filter
+	return cube_filter,intervals
 
 ##Function to get the list probe exports handle IDs
 def probeexports(logfile):
@@ -1093,6 +1151,7 @@ def probeexports(logfile):
 				s = str(line.split('Processing')[1]).split(' ')
 				msg = ''
 				cube_filter = ''
+				intervals = ''
 
 				if (float(s[5])>=300 and float(s[9])<=1000):
 					msg = '(Packet download took >300s & Packet Throughput <1000pps)'
@@ -1104,17 +1163,21 @@ def probeexports(logfile):
 					msg = '(OK)'
 
 				try:				
-					cube_filter = handlefilterdetails(logfile,str(s[2]))
+					cube_filter,intervals = handlefilterdetails(logfile,str(s[2]))
 
 				except Exception as e:
 					print(e)
 
-				if len(cube_filter)!=0:
-					fwrite.write('Handle {0} Filter {1}'.format(s[2],cube_filter))
-					fwrite.write(('Handle {0} took {1}s with {2}pps - {3}\n\n').format(s[2],s[5],s[9],msg))
-				else:
-					fwrite.write(('Handle {0} took {1}s with {2}pps - {3}\n\n').format(s[2],s[5],s[9],msg))
+				if len(intervals)== 0:
+					intervals = 'Could not find intervals for the handle'
 
+				if (len(cube_filter))!=0:
+					fwrite.write('Handle {0} Filter {1}'.format(s[2],cube_filter))
+					fwrite.write(('Handle {0} took {1}s with {2}pps - {3}\n').format(s[2],s[5],s[9],msg))
+					fwrite.write('Handle {0}: {1}\n'.format(s[2],intervals))
+				else:
+					fwrite.write(('Handle {0} took {1}s with {2}pps - {3}\n').format(s[2],s[5],s[9],msg))
+					fwrite.write('Handle {0}: {1}\n'.format(s[2],intervals))
 		fobj.close()
 		fwrite.close()
 
@@ -1904,12 +1967,30 @@ def dpi(logfile):
 	closefile(fobj)
 	fwrite.close()
 
+##Function to get vifg_grouping mode
+def vifg_grouping(logfile):
+	try:
+		config = json.load(open(logfile))
+		fwrite = open(systemdetails,'a')
+
+		for grouping in config["objects"]:
+			grp_type = (grouping['grouping_type'])
+
+		if grp_type:
+			fwrite.write('\n***** VIFG grouping setting *****\n')
+			fwrite.write('{0}\n'.format(grp_type))
+
+		fwrite.close()
+
+	except Exception as e:
+		print(e)
+
 ##Function to get hardware status
 def hardwarestatus(logfile):
 	try:
 		fobj = openfile(logfile)
 		fwrite = open(systemdetails,'a')
-		keys = ['Pwr Unit Status','Front Panel Temp ','Exit Air Temp ','System Fan','Sys Fan','SYS_Air_Inlet','SYS_Air_Outlet','SYS_FAN_']
+		keys = ['Pwr Unit Status','Front Panel Temp ','Exit Air Temp ','System Fan','Sys Fan','SYS_Air_Inlet','SYS_Air_Outlet','SYS_FAN_','System Event Log']
 		details = []
 
 		for line in fobj:
@@ -1922,6 +2003,9 @@ def hardwarestatus(logfile):
 			for x in details:
 				fwrite.write(x.strip()+'\n')
 				##print(x.strip())
+
+		fobj.close()
+		fwrite.close()
 
 	except Exception as e:
 		print(e)	
@@ -1949,6 +2033,8 @@ def confiles(logfile):
 	pktexportaccl(logfile)
     if(logfile.find('probe.conf')!=-1):
 	dpi(logfile)
+    if(logfile.find('vifg_settings.conf')!=-1):
+	vifg_grouping(logfile)
 
     return settingsconf
 
@@ -2156,7 +2242,7 @@ def main():
     	weblinks(path,filename,systemdetails)
     except Exception as e:
 	print e
-    logalyzer_upload(email,title,customer,file_name)
+##    logalyzer_upload(email,title,customer,file_name)
 ##    movefiles(path)
 ##    cleanup()
     end = time.time()
