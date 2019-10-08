@@ -1,131 +1,11 @@
 ##!/opt/support/bin/python3
 
-####################################################################################################################
+###########################################
 ##
 ## AUTHOR: Harikishan Mulagada
 ## ROLE  : Staff Engineering SteelCentral
 ##
-## 03/22/17 - Added core file count and core file names to be written in systemdetails.txt
-## 03/22/17 - Added SEVERE in the list of search string
-## 03/22/17 - Added latest backtrace file info in errorsandwarns.txt
-## 04/04/17 - Comment to look into errorsandwarns for backtrace on latest core
-## 04/05/17 - Added system info to systemdetails.txt from bios_serial_number.txt
-## 04/06/17 - Added Physical Drives status and count from storcli.txt to systemdetails.txt
-##            (Bad code - remove harcoding of index values and arthimetic to get the index value)
-## 04/07/17 - Added version of code to be pulled from .yaml files in opt/versions.
-##            Check if more necessary details can be pulled from list of available yaml files
-## 04/11/17 - movefiles function to move the output files to loaction of the tar file.
-##            check with EE's -
-##                          A. Keep the same location and add case#
-##                          B. Move the file to tar file location where they create a folder for each case
-## 04/12/17 - Added case number to be entered which is appended to output files
-##            Cleaning up unzipped folder
-## 04/13/17 - Moving output files to location of the dump file. If the file exists remove the existing file
-##            and move the new file.
-## 04/14/17 - Ran into 'UnicodeDecodeError' when opening 'temporal_data_store_rmp-reportmanagerd.log'
-##            (\data\log\temporal_data_store\)
-##            Added try catch block to catch the exception and skip the file which have different encoding
-##            Changed number of lines from backtrace to be written from 70 to 100
-## 05/16/17 - Get list of .sqlite files. Function to connect to dabatase. Currently we have only metrics.sqlite
-##            Generating 3 dat files for cpu,memory and probe.
-## 05/19/17 - Added check for case number. If entered case number is not numeric do not proceed until
-##            until valid numeric value is entered
-## 06/02/17 - Gripen will have log 'manage.log' for dbperf module which will give latest status of the module
-##            'Enabled' or 'Disabled'. Function to read the file and write the status
-##            Added logic to get list of '.json' and '.conf' files. Might be useful later
-## 06/20/17 - isnumeric is not a valid function in Python 2. Changed it to isdigit.
-## 07/13/17 - Changed logic to pick the first core file from the list instead of last. The list sorted. So we should
-##            get the latest core dump and not the oldest
-## 08/03/17 - Added logic to look into feature status file to get the latest status of modules and licensing
-##            Added logic to print dbperf history like when was it enabled/disabled etc from manage.log
-## 08/07/17 - Added logic to get the latest core dumps for each process and write the back trace of latest dump for each
-##            only. The previous logic added 07/13 is faulty.
-## 08/10/17 - Added logic to get the approximate reboot time from boot.log.Currently we do not have lastb call in the sysdump. boot.log modified timestamp might
-##            be the best bet.
-## 08/21/17 - The script will unzip the sysdump in the same location as the sysdump
-##            No cleanup is being done. If the unzipped folder exist we continue with analysis
-##            No deleting folders at the start or end of the script. This was necessary earlier because .tgz was being
-##            unzipped locally and output files were created and then all folders were deleted
-##            Deleting only output files if they already exist
-##            Logic to count the number of hostgroups from JSON file
-## 08/28/17 - Added logic for openfile function to use encoding utf8 so it does not fail on opening any UNICODE
-##            files - e.g - hostgroup json
-## 09/06/17 - Added io.open since encoding ut8 option in openfile function will not work with python 2.x
-## 09/06/17 - Added except block to catch OSError since python 2.x does not support PermissionError
-## 09/06/17 - Tested placing the script in same location as sysdump and it does not change how the script runs nor does delete
-##            anything unnecessarily
-## 09/06/17 - Added logic to get the storage layout information
-## 10/10/17 - Added logic to change permissions on the unzipped folder and files so other users can access
-##	      Added logic to look for rollup processor to determine possible probe hangs
-## 10/11/17 - Added logic to look for slab file messages to check the buffers in npm_capture
-## 10/30/17 - Added logic to look for symptoms on BUG 291485
-## 11/02/17 - Added logic to get the timezone of the apppliance from timezone.txt. The file is new from Harrier release
-## 11/03/17 - Added logic to extract and work in proper workdir. Harrier release changed the name of extracted folder.
-## 11/07/17 - Added logic to extract the data area quotas and used space from global.yaml file in npm_data_manager.
-## 12/06/17 - Added logic to check if DPI is disabled and if we need to check for BUG 293099
-## 12/16/17 - Added logic to show the Install time for the latest upgrade
-## 12/29/17 - Added logic to show weblinks for the output files for easy access
-## 01/02/18 - Added logic to catch BUG 289823 - rollup_stats.json
-## 01/03/18 - Added logic to catch BUG 294375 - Incorrect storage block settings
-## 01/04/18 - Added logic to get the execution time of the script.
-## 01/16/18 - Added logic to get ERRORS and WARNINGS from yarder log
-## 01/21/18 - Added logic to get the DB Types monitored
-## 01/25/18 - Keep a list of all .gz and .logz files in a list to see what you can do with them later
-## 02/01/18 - Added logic to check at_api mem usage violations as mentioned in BUG#290431
-## 02/05/18 - Added logic to catch Call Traces in /var/log/messages (Not the full traces, just the instance when it happened)
-##	      Added logic to exclude files to be parsed by errorsandwarns. Use skipfiles list to exclude/include files
-## 02/09/18 - Added logic to readh npm_alerts.db file for alert information but python sqlite3 version is not matching
-##	      sqlite3 version with which AR11 is creating the DB.
-##
-## 02/15/18 - Added logic to catch TDS ASA data being dropped. These messages exists only from INVADER and above.
-## 02/20/18 - Added logic to check if NIC is in wrong slot. Check tcstats.txt to see if we have mon0_0
-## 03/07/18 - Added logic to get the number of defined applications and also enabled applications
-## 04/12/18 - Added more files to skipfiles list to stop processing them
-##	      Added logic to catch exception when files are missing - codeversion and layout
-## 04/13/18 - Added logic to get hardware and software drops from metric.sqlite DB
-## 04/16/18 - Added logic to get the status of the secure vault. This feature is available only for 11.4 and above.
-## 05/11/18 - Added logic to get the out-of-sync clock messages in /var/log/messages
-## 06/04/18 - BUG where script is failing when missing global.yaml and hence dict is missing. Handle this with try/catch block.
-## 07/19/18 - Added logic to catch stitcher drops to aggregrates for errors 5202,5203 and 5204 errors.
-##	      Added logic to catch if we have issues writing to IP conversation table in the database based on load times
-## 09/24/18 - Changed logic for storcli function to get the health status of the Storage units
-## 10/01/18 - Added logic to catch BUG 300800
-## 10/11/18 - Changed logic in storcli function to include SUs which do not have Data Areas set and have NONE
-## 11/01/18 - Added logic to upload bundle to logalyzer after the script runs. Using Andrew's script
-## 11/19/18 - Added logic to catch bug 297095
-##	      Added logic to catch multiple Report Manager issues
-## 11/30/18 - Added logic to upload the AR11 bundle to logalyzer
-## 12/13/18 - Added more files to SKIPFILES list which can be skipped
-## 01/15/19 - Skip history_bt.txt in coredumps folders in the count of corefiles
-## 01/21/19 - Added logic to get Packet Acceleration details from settings.conf file in Kfir
-##            Added logic to catch BUG 306278	
-## 01/28/19 - Bug fix for data area usage section. Using YAML module
-## 02/04/19 - Added logic to get Hardware details like Fan RPM and Temperatures
-##	      Added logic to catch MySQL connection issues with Reportmanagerd
-## 02/13/19 - Added logic to catch the UnboundLocalError which triggered when there is mismatch between .tgz name
-##            and the folder which is extracted. Print an error to mention the above so EE's can correct the name
-## 02/28/19 - Added logic to catch BUG 307140
-## 03/05/19 - Added logic to pass arguments using sys.argv
-##	      Added logic to pass optional description to distinguisgh logalyzer reports
-## 03/11/19 - Added logic to get the Handle details from probe.log
-## 03/25/19 - Added logic to catch missing sysdump file name with .tgz
-## 04/10/19 - Added logic to catch - MIfG errors, NIC up/down events BUG 307680
-## 04/15/19 - Added logic to catch FATAL blocked queries in report manager log
-## 05/14/19 - Added key for System Event Log in hardwarestatus function
-## 05/15/19 - Added logic to write # intervals for probe handle details.
-## 05/28/19 - Added logic to get the VIFG grouping type
-## 06/05/19 - Added logic to catch IO Error in storage services
-####################################################################################################################
-
-####################################################################################################################
-                                        ##############TO DO#############
-
-## 07/19/17 - Implement logic to check if the same error occurs more than once and write accoordingly. This is major change.
-## 09/05/17 - If the sysdump name is anything besides what the appliance generated then the script would fail.
-##            This is happening because we are constructing the working folder name based on the filename of the dump.
-##            If the file is different from the extracted folder name then obviously script does not find the folder
-##            and does not read any files.
-###################################################################################################################
+###########################################
 
 
 import os
@@ -153,30 +33,12 @@ def cleanup(path,filename,systemdetails):
     cwd = os.path.dirname(os.path.abspath(path))
     os.chdir(cwd)
 
-##    print('Deleting folders...')
-##    
-##    for fdname in os.listdir(cwd):
-##        if os.path.isdir(os.path.abspath(fdname)):
-##            print('Deleting folder',os.path.abspath(fdname))
-##            shutil.rmtree(os.path.abspath(fdname),ignore_errors=False,onerror=del_rw)
-
-
     for fname in os.listdir(cwd):
         if (fname.find(filename)!=-1 or fname.find(systemdetails)!=-1):
             print('File already exists...',fname)
             print('Deleting file...',fname)
             os.remove(fname)
 
-##Unzip the diag bundle zip file
-####def unzip1(filepath):
-####
-####    print('Unzipping bundle..')
-####    
-####    zfile = tarfile.open(filepath)
-####    zfile.extractall()
-####    zfile.close()
-####
-####    print('Finished unzipping the bundle...')
 
 ##Unzip to same location where the bundle is present
 def unzip(filepath):
@@ -189,8 +51,6 @@ def unzip(filepath):
 ##    file_tar,file_tar_ext = os.path.splitext(filepath)
 ##    file_untar, file_untar_ext = os.path.splitext(file_tar)
 ##    workdir = os.path.join(os.path.dirname(filepath),filename[filename.index('sysdump'):].split('.')[0])
-
-##    print('PROPER DIR: ',workdir)
 
     os.chdir(extractpath)
 
@@ -444,6 +304,7 @@ def navigatefolders(workdir):
 		bug294375(logfile)
 		bug306278(logfile)
 		bug307140(logfile)
+		bug308981(logfile)
 		npm_cpt_packetdrops(logfile)
 		currentblock_openfile(logfile)
 		##npmpktreaders(logfile)
@@ -462,6 +323,7 @@ def navigatefolders(workdir):
 			if logfile.find('fsrvcltraf.log')!=-1:
 				print('Processing ',logfile)
 				tdsasadrops(logfile)
+				bug306040(logfile)
 				errorsandwarns(logfile)
 			else:
 			    if (logfile.find('error.log')!=-1 and logfile.find('stitcher')!=-1):
@@ -483,12 +345,16 @@ def navigatefolders(workdir):
 						print('Processing ',logfile)
 						rptmgrissues(logfile)
 						errorsandwarns(logfile)
-			    	    	else:
-					    if os.path.basename(logfile) in skipfiles:
-						print('Skipping file... ',logfile)
-			        	    else:
-						print('Processing ',logfile)
+					else:
+					    if(logfile.find('rsl_core_rest_svcs.log')!=-1):
+					    	bug308611(logfile)
 						errorsandwarns(logfile)
+			    	    	    else:
+					        if os.path.basename(logfile) in skipfiles:
+							print('Skipping file... ',logfile)
+			        	        else:
+							print('Processing ',logfile)
+							errorsandwarns(logfile)
 
     for logfile in gnrlfiles:
 	if (logfile.find('messages')!=-1 and logfile.find('diagstash')==-1):
@@ -498,6 +364,7 @@ def navigatefolders(workdir):
 		errorsandwarns(logfile)
 	elif logfile.find('storage_services')!=-1:
 		bug307680(logfile)
+		bug309610(logfile)
 		IOerror(logfile)
 	else:
 		print('Processing ',logfile)
@@ -556,6 +423,7 @@ def rptmgrissues(logfile):
 	mysql_conn_cnt = 0
 	pageviewload = 0
 	blocked_query = 0
+	parsing_failures = 0
 
 	try:
 		fobj = openfile(logfile)
@@ -577,6 +445,8 @@ def rptmgrissues(logfile):
 					pageviewload+=1
 				if (line.find('Blocked queries detected in data source')!=-1):
 					blocked_query+=1
+				if (line.find('error: parsing failed: Error adding attribute')!=-1):
+					parsing_failures+=1
 
 		if data_src_fail_cnt>0:
 			fwrite.write('\n***** Report Manager data source failed *****\n')
@@ -608,6 +478,11 @@ def rptmgrissues(logfile):
 			fwrite.write('Blocked queries detected in data source: occurred {0} times\n'.format(blocked_query))
 			fwrite.write('Look for Report Manager coredumps and also which data source is having issues from the log\n')
 			fwrite.write('Might indicate data source became unresponsive\n')
+			fwrite.write('Please check /data/log/report_manager/report_manager.log for more details...\n')
+		if parsing_failures>0:
+			fwrite.write('\n***** ReportManager Parsing Failures ***** \n')
+			fwrite.write('Parsing Failed error messages occurred {0} times\n'.format(parsing_failures))
+			fwrite.write('Possibly Bug#310700. Might lead to "UNNNAMED" applications\n')
 			fwrite.write('Please check /data/log/report_manager/report_manager.log for more details...\n')
 
 	except Exception as e:
@@ -689,6 +564,54 @@ def npm_cpt_packetdrops(logfile):
 	fobj.close()
 	fwrite.close()
 		
+	return
+
+##Function to catch bug306040
+def bug306040(logfile):
+	try:
+		cnt = 0
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if('ERROR' in line and 'DbSrvclTrafficFilter.cc' in line and 'wait_data_timeout=50' in line):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** Bug 306040 *****\n')
+			fwrite.write('SRVCL filter could not handle the TCP and TCP_ADV buffers\n')
+			fwrite.write('Error message occurred {0} times\n'.format(cnt))
+			fwrite.write('For more details please take a look at fsrvcltraf.log\n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+	return
+
+##Function to catch bug308981
+def bug308981(logfile):
+	try:
+		cnt = 0
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if(line.find('FATAL')!=-1 and line.find('Assertion \'!NT_NET_GET_PKT_SLICED(&packet_buf)\' failed:')!=-1):
+				cnt+=1
+		if cnt>0:
+			fwrite.write('\n***** Bug 308981 ******\n')
+			fwrite.write('FATAL Assertion NT_NET_GET_PKT_SLICED occurred {0} times \n'.format(cnt))
+			fwrite.write('Constant coredumps for npm_capture might occur because this bug\n')
+			fwrite.write('Please check the bug for more details. https://bugzilla.nbttech.com/show_bug.cgi?id=308981\n')
+
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
 	return
 
 ##Function to catch bug 297095
@@ -796,9 +719,9 @@ def bug307680(logfile):
 
 		for line in fobj:
 			if(('ERROR' in line) and ('Error enforcing quota for' in line) and ('UNABLE TO OPEN TABLE' in line)):
-				cnt+=1
+				cnt += 1
 
-		if cnt>0:
+		if cnt > 0:
 			fwrite.write('\n***** BUG 307680 *****\n')
 			fwrite.write('Error enforcing quota data areas, Unable to open table occurred {0} times\n'.format(cnt))
 			fwrite.write('Possibly bug 307680 https://bugzilla.nbttech.com/show_bug.cgi?id=307680\n')
@@ -809,6 +732,58 @@ def bug307680(logfile):
 
 	fobj.close()
 	fwrite.close()
+
+##Function to catch bug 309610
+def bug309610(logfile):
+	try:
+		cnt = 0
+		
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			##if(('ERROR' in line) and ('SizeConflictError: Space set for' in line)):
+			##if(re.search('ERROR',line) and re.search('set_space#012SizeConflictError: Space set for.+does not honor minimum',line)):
+			if(re.search('set_space#012SizeConflictError: Space set for.+does not honor minimum',line)):
+				cnt += 1
+
+		if cnt > 0:
+			fwrite.write('\n***** BUG 309610 *****\n')
+			fwrite.write('System is having issues rebalancing TDS quotas assigned\n')
+			fwrite.write('You might see 500 Internal Server Error messages on the system because of these errors\n')
+			fwrite.write('The error ocuurred {0} times in {1}\n'.format(cnt,logfile))
+			fwrite.write('Please look into the following bug https://bugzilla.nbttech.com/show_bug.cgi?id=309610\n')
+
+	except Exception as e:
+		print(e)
+	
+	fobj.close()
+	fwrite.close()
+
+##Function to catch Bug 308611
+def bug308611(logfile):
+	try:
+		cnt = 0
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if(('ERROR' in line) and ('Failed to initialize rsl_core_rest_svcs:failed to init rsl_core_singleton object - Failed to init classification lib object: Duplicate key' in line)):
+				cnt+=1
+
+		if cnt>0:
+			fwrite.write('\n***** BUG 308611 *****\n')
+			fwrite.write('Failed to init classification lib object: Duplicate key messages occurred {0} times\n'.format(cnt))
+			fwrite.write('Check if rsl_core_rest_svcs is in FATAL state\n')
+			fwrite.write('Please check rsl_core_rest_svcs.log to find out which duplicate key is the service complaining about\n')
+			fwrite.write('Check bug https://bugzilla.nbttech.com/show_bug.cgi?id=308611 on how to fix the issue\n')
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
+	return
 
 ##Function to catch IOError in storage_services
 def IOerror(logfile):
@@ -2225,9 +2200,6 @@ def main():
     file_name = os.path.abspath(path)
 
     settingsconf = ''
-##    cpu = str(casenum)+'_'+'cpu.dat'
-##    mem = str(casenum)+'_'+'mem.dat'
-##    probe = str(casenum)+'_'+'probe.dat'
     cleanup(path,filename,systemdetails)
 
     try:
@@ -2242,9 +2214,7 @@ def main():
     	weblinks(path,filename,systemdetails)
     except Exception as e:
 	print e
-##    logalyzer_upload(email,title,customer,file_name)
-##    movefiles(path)
-##    cleanup()
+    logalyzer_upload(email,title,customer,file_name)
     end = time.time()
     print('Took '+str(end-start)+'s'+' for the script to finish.... ')        
 main()
