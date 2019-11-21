@@ -350,11 +350,16 @@ def navigatefolders(workdir):
 					    	bug308611(logfile)
 						errorsandwarns(logfile)
 			    	    	    else:
-					        if os.path.basename(logfile) in skipfiles:
-							print('Skipping file... ',logfile)
-			        	        else:
-							print('Processing ',logfile)
+					    	if(logfile.find('probe_aux.log')!=-1):
+							newdbtypes(logfile)
+							probeauxissues(logfile)
 							errorsandwarns(logfile)
+						else:
+					        	if os.path.basename(logfile) in skipfiles:
+								print('Skipping file... ',logfile)
+			        	        	else:
+								print('Processing ',logfile)
+								errorsandwarns(logfile)
 
     for logfile in gnrlfiles:
 	if (logfile.find('messages')!=-1 and logfile.find('diagstash')==-1):
@@ -564,6 +569,32 @@ def npm_cpt_packetdrops(logfile):
 	fobj.close()
 	fwrite.close()
 		
+	return
+
+##Function to catch issues in probe aux logs
+def probeauxissues(logfile):
+	try:
+		bug310781 = 0
+
+		fobj = openfile(logfile)
+		fwrite = open(systemdetails,'a')
+
+		for line in fobj:
+			if ((line.find('WARN')!=-1) and (line.find('One or more dispatcher consumers are not processing packets, reboot required')!=-1)):
+				bug310781+=1
+
+		if bug310781>0:
+			fwrite.write('\n***** Bug 310781 *****\n')
+			fwrite.write('Possible probe aux coredumps\n')
+			fwrite.write('One of probe_aux thread might have stopped processing packets.\nProcess might have committed suicide.\nIssue happened {0} time(s)\n'.format(bug310781))
+			fwrite.write('Please check the bug for more details. https://bugzilla.nbttech.com/show_bug.cgi?id=310781\n')
+
+	except Exception as e:
+		print(e)
+
+	fobj.close()
+	fwrite.close()
+
 	return
 
 ##Function to catch bug306040
@@ -980,12 +1011,14 @@ def dbtypes(logfile):
 				if match not in dblist:
 					dblist.append(match)
 
-##		print(dblist)
-		for db in dblist:
-			if len(db)>0:
-				fwrite.write(str(db[0])+'\n')
-			else:
-				fwrite.write('[DB2 DRDA]'+'\n')
+                if len(dblist)>0:
+                        fwrite.write('\n***** Databases Monitored*****\n')
+
+			for db in dblist:
+				if len(db)>0:
+					fwrite.write(str(db[0])+'\n')
+				else:
+					fwrite.write('[DB2 DRDA]'+'\n')
 
 		fobj.close()
 		fwrite.close()
@@ -995,6 +1028,51 @@ def dbtypes(logfile):
 		print(e)
 	
 	return dblist
+
+##Function get DB Types from probe_aux.log
+def newdbtypes(logfile):
+        newdblist = []
+	dbdict = {}
+
+        try:
+                fobj = openfile(logfile)
+                fwrite = open(systemdetails,'a')
+
+                for line in fobj:
+                        if (line.find('New database')!=-1 and line.find('(monitored)')!=-1):
+                                ##tmp = (line[line.index('database'):])
+				line = line.split('[sqldecode]')[1]
+                                match = re.findall(r'\[[\ a-zA-Z]*\]',line)          ##matches all DB types excpet DB2 - \[[a-zA-Z][\d2 a-zA-Z]*\]
+                                ip = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}',line)
+                                
+				##dblist.append(re.findall(r'[\d.-]+',tmp))
+                                ##if str(match) not in newdblist:
+                                ##        newdblist.append(match)
+
+				dbdict.update({ip[0]:str(match[0])})
+
+		if len(dbdict)>0:
+			fwrite.write('\n***** Databases Monitored*****\n')
+		for key,value in dbdict.items():
+			fwrite.write(value+'-'+key+'\n')
+
+##		if len(newdblist)>0:
+##			fwrite.write('\n***** Databases Monitored*****\n')
+
+##                	for db in newdblist:
+##                        	if len(db)>0:
+##                                	fwrite.write(str(db[0])+'\n')
+##                        	else:
+##                                	fwrite.write('[DB2 DRDA]'+'\n')
+
+                fobj.close()
+                fwrite.close()
+
+        except Exception as e:
+                print('Unable to open file... ',logfile)
+                print(e)
+
+        return newdblist
 
 ##Function to check packet broker misconfiguration
 def bug291485(logfile,settingsconf):
@@ -1942,6 +2020,34 @@ def dpi(logfile):
 	closefile(fobj)
 	fwrite.close()
 
+
+##Function to check if dbperf legacy has been enabled
+def dbperflegacy(logfile):
+	try:
+		config = json.load(open(logfile))
+		fwrite = open(systemdetails,'a')
+
+		use_legacy_heuristics = config["sql_common"]["use_legacy_heuristics"]
+		use_legacy_parsers = config["sql_common"]["use_legacy_parsers"]
+
+		if (use_legacy_heuristics is False and use_legacy_parsers is False):
+			fwrite.write('\n****** DBPERF legacy parsing details *****\n')
+			fwrite.write('If set to False then dbperf is using latest code and not legacy code\n')
+			fwrite.write('use_legacy_heuristics - {0}\n'.format(use_legacy_heuristics))
+			fwrite.write('use_legacy_parsers - {0}\n'.format(use_legacy_parsers))
+		else:
+			fwrite.write('\n****** DBPERF legacy parsing details *****\n')
+			fwrite.write('Legacy parsins is enabled. Customer so upgrade to 11.8 or later and disable this setting to use new dbperf code\n')
+			fwrite.write('Check with ENG before disabling\n')
+			fwrite.write('use_legacy_heuristics - {0}\n'.format(use_legacy_heuristics))
+			fwrite.write('use_legacy_parsers - {0}\n'.format(use_legacy_parsers))
+			 
+		fwrite.close()
+
+	except Exception as e:
+		print(e)
+
+
 ##Function to get vifg_grouping mode
 def vifg_grouping(logfile):
 	try:
@@ -1963,25 +2069,47 @@ def vifg_grouping(logfile):
 ##Function to get hardware status
 def hardwarestatus(logfile):
 	try:
-		fobj = openfile(logfile)
-		fwrite = open(systemdetails,'a')
-		keys = ['Pwr Unit Status','Front Panel Temp ','Exit Air Temp ','System Fan','Sys Fan','SYS_Air_Inlet','SYS_Air_Outlet','SYS_FAN_','System Event Log']
-		details = []
+		if (logfile.find('ipmi_sdr')!=-1):
+			fobj = openfile(logfile)
+			fwrite = open(systemdetails,'a')
+			
+			keys = ['Pwr Unit Status','Front Panel Temp ','Exit Air Temp ','System Fan','Sys Fan','SYS_Air_Inlet','SYS_Air_Outlet','SYS_FAN_','System Event Log']
+			details = []
 
-		for line in fobj:
-			for key in keys:
-				if key.strip() in line:
-					details.append(line)
+			for line in fobj:
+				for key in keys:
+					if key.strip() in line:
+						details.append(line)
 
-		if len(details)>0:
-			fwrite.write('\n***** Hardware Details ***** \n')
-			for x in details:
-				fwrite.write(x.strip()+'\n')
-				##print(x.strip())
+			if len(details)>0:
+				fwrite.write('\n***** Hardware Details ***** \n')
+				for x in details:
+					fwrite.write(x.strip()+'\n')
+					##print(x.strip())
 
-		fobj.close()
-		fwrite.close()
+			fobj.close()
+			fwrite.close()
 
+		if (logfile.find('ipmi_sel_elist.txt')!=-1):
+			fobj = openfile(logfile)
+			fwrite = open(systemdetails,'a')
+
+			keys = ['Correctable ECC logging limit reached']
+			details = []
+
+			for line in fobj:
+				for key in keys:
+					if key.strip() in line:
+						print(line)
+						details.append(line)
+
+			if len(details)>0:
+				fwrite.write('\n***** Possible Memory DIMM issues *****\n')
+				fwrite.write('Correctable ECC logging limit reached | Asserted messages occurred {0} time(s)\n'.format(len(details)))
+				fwrite.write('Please take a look at ipmi_sel_elist.txt file for more details \n')
+
+			fobj.close()
+			fwrite.close()
 	except Exception as e:
 		print(e)	
 
@@ -2006,10 +2134,12 @@ def confiles(logfile):
     if(logfile.find('settings.conf')!=-1):
         settingsconf = logfile
 	pktexportaccl(logfile)
-    if(logfile.find('probe.conf')!=-1):
+    if(logfile.find('probe.conf')!=-1 and logfile.find('probe_aux')!=-1):
 	dpi(logfile)
+	dbperflegacy(logfile)
     if(logfile.find('vifg_settings.conf')!=-1):
 	vifg_grouping(logfile)
+	
 
     return settingsconf
 
@@ -2109,23 +2239,8 @@ def configdetails(logfile):
 							if(logfile.find('secure_vault_rest_state.txt')!=-1):
                                                             secure_vault_status(logfile)
 							else:
-							    if(logfile.find('ipmi_sdr_elist_all.txt')!=-1 or logfile.find('ipmi_sdr.txt')!=-1):
+							    if(logfile.find('ipmi_sdr_elist_all.txt')!=-1 or logfile.find('ipmi_sdr.txt')!=-1 or logfile.find('ipmi_sel_elist.txt')!=-1):
 								hardwarestatus(logfile)
-##Function to move files to location where the bundle is present
-####def movefiles(path):
-####    cwd = os.getcwd()
-####    dst = os.path.abspath(os.path.dirname(path))
-####    
-####    for file in os.listdir(os.getcwd()):
-####        filelist = (os.path.join(os.path.abspath(file),dst))
-####        if ((file.endswith('.txt') or file.endswith('.dat')) and (file.find('probe')!=-1 or file.find('mem')!=-1 or file.find('cpu')!=-1 or file.find('errorsandwarns')!=-1 or file.find('systemdetails')!=-1)):
-####            try:
-####                print('Moving '+os.path.abspath(file)+' to '+dst)
-####                shutil.move(os.path.abspath(file),dst)
-####            except IOError:
-####                 print(file+' already exists...Removing file')
-####                 os.remove(os.path.join(dst,file))
-####                 shutil.move(os.path.abspath(file),dst)
 
 ##Function to set details when we have 4 arguments
 def setdetails4(argv):
@@ -2214,7 +2329,7 @@ def main():
     	weblinks(path,filename,systemdetails)
     except Exception as e:
 	print e
-    logalyzer_upload(email,title,customer,file_name)
+##    logalyzer_upload(email,title,customer,file_name)
     end = time.time()
     print('Took '+str(end-start)+'s'+' for the script to finish.... ')        
 main()
